@@ -1,5 +1,9 @@
 === 8.0.0 beta3
 
+  * Support remote unix socket forwarding (streamlocal-forward@openssh.com): ssh.forward.remote_socket,
+    cancel_remote_socket and active_remote_sockets, forwarding connections from a remote unix socket
+    to a local unix socket or TCP service
+
   * Verify @cert-authority host certificate constraints — principals (shell-glob, matching OpenSSH), validity window, host type, and critical options — instead of trusting any CA-signed certificate for any host [#1009]
 
 === 7.3.3

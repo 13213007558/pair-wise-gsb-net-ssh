@@ -74,8 +74,20 @@ module Net
                           string string string string string string string string string string
                           bool]
                      when NEWKEYS then []
-                     when CHANNEL_OPEN then %i[string long long long]
+                     when GLOBAL_REQUEST
+                       parts = %i[string bool]
+                       case @data[0]
+                       when "streamlocal-forward@openssh.com", "cancel-streamlocal-forward@openssh.com"
+                         parts << :string
+                       end
+                       parts
+                     when REQUEST_SUCCESS, REQUEST_FAILURE then []
+                     when CHANNEL_OPEN
+                       parts = %i[string long long long]
+                       parts.concat(%i[string string]) if @data[0] == "forwarded-streamlocal@openssh.com"
+                       parts
                      when CHANNEL_OPEN_CONFIRMATION then %i[long long long long]
+                     when CHANNEL_OPEN_FAILURE then %i[long long string string]
                      when CHANNEL_DATA then %i[long string]
                      when CHANNEL_EXTENDED_DATA then %i[long long string]
                      when CHANNEL_EOF, CHANNEL_CLOSE, CHANNEL_SUCCESS, CHANNEL_FAILURE then [:long]

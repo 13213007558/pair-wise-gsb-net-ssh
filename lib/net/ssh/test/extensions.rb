@@ -146,18 +146,42 @@ module Net
             def select_for_test(readers = nil, writers = nil, errors = nil, wait = nil)
               return select_for_real(readers, writers, errors, wait) unless Net::SSH::Test::Extensions::IO.extension_enabled?
 
-              ready_readers = Array(readers).select { |r| r.select_for_read? }
-              ready_writers = Array(writers).select { |r| r.select_for_write? }
+              readers = Array(readers)
+              writers = Array(writers)
+
+              # Real IO objects (e.g. local unix sockets being forwarded to)
+              # cannot use the StringIO-based readiness checks, so those are
+              # queried with a real, non-blocking select instead.
+              real_readers, mock_readers = readers.partition { |reader| reader.is_a?(::IO) && !reader.is_a?(::StringIO) }
+              real_writers, mock_writers = writers.partition { |writer| writer.is_a?(::IO) && !writer.is_a?(::StringIO) }
+
+              ready_readers = mock_readers.select { |r| r.select_for_read? }
+              ready_writers = mock_writers.select { |r| r.select_for_write? }
               ready_errors  = Array(errors).select  { |r| r.select_for_error? }
+
+              unless real_readers.empty? && real_writers.empty?
+                real_ready = select_for_real(real_readers, real_writers, nil, 0)
+                if real_ready
+                  ready_readers.concat(real_ready[0])
+                  ready_writers.concat(real_ready[1])
+                end
+              end
 
               return [ready_readers, ready_writers, ready_errors] if ready_readers.any? || ready_writers.any? || ready_errors.any?
 
               processed = 0
-              Array(readers).each do |reader|
+              mock_readers.each do |reader|
                 processed += 1 if reader.idle!
               end
 
-              raise "no readers were ready for reading, and none had any incoming packets" if processed == 0 && wait != 0
+              if processed == 0 && wait != 0
+                unless real_readers.empty? && real_writers.empty?
+                  real_ready = select_for_real(real_readers, real_writers, nil, wait)
+                  return real_ready ? [real_ready[0], real_ready[1], []] : [[], [], []]
+                end
+
+                raise "no readers were ready for reading, and none had any incoming packets"
+              end
 
               [[], [], []]
             end

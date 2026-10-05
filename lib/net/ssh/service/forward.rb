@@ -19,6 +19,13 @@ module Net
         # A simple class for representing a requested remote forwarded port.
         Remote = Struct.new(:host, :port) # :nodoc:
 
+        # A simple class for representing a requested remote forwarded unix
+        # socket. When +socket_path+ is set, connections accepted on the
+        # remote socket are forwarded to that local unix socket; otherwise
+        # they are forwarded to the local TCP endpoint described by +host+
+        # and +port+.
+        RemoteSocket = Struct.new(:socket_path, :host, :port) # :nodoc:
+
         # Instantiates a new Forward service instance atop the given connection
         # service session. This will register new channel open handlers to handle
         # the specialized channels that the SSH port forwarding protocols employ.
@@ -26,11 +33,13 @@ module Net
           @session = session
           self.logger = session.logger
           @remote_forwarded_ports = {}
+          @remote_forwarded_sockets = {}
           @local_forwarded_ports = {}
           @agent_forwarded = false
           @local_forwarded_sockets = {}
 
           session.on_open_channel('forwarded-tcpip', &method(:forwarded_tcpip))
+          session.on_open_channel('forwarded-streamlocal@openssh.com', &method(:forwarded_streamlocal))
           session.on_open_channel('auth-agent', &method(:auth_agent_channel))
           session.on_open_channel('auth-agent@openssh.com', &method(:auth_agent_channel))
         end
@@ -274,6 +283,86 @@ module Net
           end
         end
 
+        # Requests that all connections on the given remote unix socket be
+        # forwarded via the local host. The remote server is asked to listen
+        # on a unix socket (the last argument), and each connection accepted
+        # there is forwarded to a local endpoint, which may be either a local
+        # unix socket or a local TCP service:
+        #
+        #   # forward to a local unix socket
+        #   ssh.forward.remote_socket('/tmp/local.sock', '/tmp/remote.sock')
+        #
+        #   # forward to a local TCP service
+        #   ssh.forward.remote_socket(8080, '127.0.0.1', '/tmp/remote.sock')
+        #
+        # This method will return immediately, but the socket will not actually
+        # be forwarded immediately. If the remote server is not able to begin
+        # the listener for this request, an exception will be raised
+        # asynchronously, and the socket will not show up in
+        # #active_remote_sockets.
+        #
+        # You may pass a block that will be called when the forward request
+        # receives a response. This block will be passed the remote socket
+        # path on success, or :error if the request failed. If the block
+        # returns :no_exception, the "failed forwarding" exception will not be
+        # thrown.
+        def remote_socket(*args)
+          if args.length == 2
+            destination = RemoteSocket.new(args[0], nil, nil)
+          elsif args.length == 3
+            destination = RemoteSocket.new(nil, args[1].to_s, args[0].to_i)
+          else
+            raise ArgumentError, "expected 2 or 3 parameters, got #{args.length}"
+          end
+
+          remote_socket_path = args[-1]
+
+          session.send_global_request("streamlocal-forward@openssh.com", :string, remote_socket_path) do |success, response|
+            if success
+              debug { "remote forward from remote socket #{remote_socket_path} to #{destination.inspect} established" }
+              @remote_forwarded_sockets[remote_socket_path] = destination
+              yield remote_socket_path if block_given?
+            else
+              instruction = if block_given?
+                              yield :error
+                            end
+              unless instruction == :no_exception
+                error { "remote socket forwarding request failed" }
+                raise Net::SSH::Exception, "remote socket forwarding request failed"
+              end
+            end
+          end
+        end
+
+        # Requests that a remote forwarded unix socket be cancelled. The remote
+        # socket on the remote host will be terminated, but not immediately.
+        # This method returns immediately after queueing the request to be sent
+        # to the server. If for some reason the socket cannot be cancelled, an
+        # exception will be raised (asynchronously).
+        #
+        # The socket remains in #active_remote_sockets--and thus keeps
+        # accepting new channels--until the server confirms the cancellation.
+        # Channels that were already established are not affected by the
+        # cancellation.
+        #
+        # If you want to know when the forward has been cancelled, it will no
+        # longer be present in the #active_remote_sockets list.
+        def cancel_remote_socket(remote_socket_path)
+          session.send_global_request("cancel-streamlocal-forward@openssh.com", :string, remote_socket_path) do |success, response|
+            if success
+              @remote_forwarded_sockets.delete(remote_socket_path)
+            else
+              raise Net::SSH::Exception, "could not cancel remote socket forward request on #{remote_socket_path}"
+            end
+          end
+        end
+
+        # Returns all active forwarded remote unix sockets. The returned value
+        # is an array of the socket paths on the remote host.
+        def active_remote_sockets
+          @remote_forwarded_sockets.keys
+        end
+
         # Enables SSH agent forwarding on the given channel. The forwarded agent
         # will remain active even after the channel closes--the channel is only
         # used as the transport for enabling the forwarded connection. You should
@@ -401,6 +490,33 @@ module Net
           prepare_client(client, channel, :remote)
         rescue SocketError => err
           raise Net::SSH::ChannelOpenFailed.new(2, "could not connect to remote host (#{remote.host}:#{remote.port}): #{err.message}")
+        end
+
+        # The callback used when a new "forwarded-streamlocal@openssh.com"
+        # channel is requested by the server. This will open a new socket to
+        # the local unix socket path, or the local host/port, specified when
+        # the forwarded connection was first requested. Only remote socket
+        # paths that are currently active (see #active_remote_sockets) are
+        # accepted; anything else is rejected.
+        def forwarded_streamlocal(session, channel, packet)
+          connected_path = packet.read_string
+          _reserved      = packet.read_string
+
+          remote = @remote_forwarded_sockets[connected_path]
+          if remote.nil?
+            raise Net::SSH::ChannelOpenFailed.new(1, "unknown request from remote forwarded connection on #{connected_path}")
+          end
+
+          client = if remote.socket_path
+                     Socket.unix(remote.socket_path)
+                   else
+                     TCPSocket.new(remote.host, remote.port)
+                   end
+          info { "connected #{connected_path}" }
+
+          prepare_client(client, channel, :remote)
+        rescue SocketError, SystemCallError => err
+          raise Net::SSH::ChannelOpenFailed.new(2, "could not connect to local endpoint for #{connected_path}: #{err.message}")
         end
 
         # The callback used when an auth-agent channel is requested by the server.
