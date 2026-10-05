@@ -1,5 +1,6 @@
 require 'net/ssh/errors'
 require 'net/ssh/known_hosts'
+require 'net/ssh/krl'
 
 module Net
   module SSH
@@ -15,6 +16,8 @@ module Net
       class Always
         def verify(arguments)
           host_keys = arguments[:session].host_keys
+
+          verify_not_revoked!(host_keys, arguments)
 
           # We've never seen this host before, so raise an exception.
           process_cache_miss(host_keys, arguments, HostKeyUnknown, "is unknown") if host_keys.empty?
@@ -46,6 +49,36 @@ module Net
         end
 
         private
+
+        def verify_not_revoked!(host_keys, args)
+          options = args[:session].options
+          files = Array(options && options[:revoked_host_keys])
+          return if files.empty?
+
+          files.each do |file|
+            path = File.expand_path(file.to_s)
+            unless File.file?(path) && File.readable?(path)
+              return reject_revocation!(host_keys, args, "revoked host key file #{path.inspect} is not readable")
+            end
+
+            begin
+              krl = KRL.load_file(path)
+            rescue KRL::ParseError => e
+              return reject_revocation!(host_keys, args, "revoked host key file #{path.inspect} is invalid: #{e.message}")
+            end
+
+            next unless krl.revoked?(args[:key])
+
+            return reject_revocation!(host_keys, args, "has been revoked")
+          end
+        end
+
+        def reject_revocation!(host_keys, args, message)
+          exception = HostKeyMismatch.new("fingerprint #{args[:fingerprint]} #{message} for #{host_keys.host.inspect}")
+          exception.data = args
+          exception.callback = Proc.new { }
+          raise exception
+        end
 
         # Enforces the @cert-authority certificate constraints for entries that
         # implement them (Net::SSH::HostKeyEntries::CertAuthority). Non-certificate

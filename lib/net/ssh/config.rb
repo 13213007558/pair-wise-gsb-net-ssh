@@ -33,6 +33,7 @@ module Net
     # * ProxyJump => maps to the :proxy option
     # * PubKeyAuthentication => maps to the :auth_methods option
     # * RekeyLimit => :rekey_limit
+    # * RevokedHostKeys => :revoked_host_keys
     # * StrictHostKeyChecking => :verify_host_key
     # * User => :user
     # * UserKnownHostsFile => :user_known_hosts_file
@@ -294,6 +295,8 @@ module Net
             hash[:number_of_password_prompts] = value.to_i
           when :userknownhostsfile
             hash[:user_known_hosts_file] = value.split(/\s+/)
+          when :revokedhostkeys
+            hash[:revoked_host_keys] = value.split(/\s+/)
           when *TRANSLATE_CONFIG_KEY_RENAME_MAP.keys
             hash[TRANSLATE_CONFIG_KEY_RENAME_MAP[key]] = value
           end

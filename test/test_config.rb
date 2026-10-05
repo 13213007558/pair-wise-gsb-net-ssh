@@ -189,6 +189,14 @@ class TestConfig < NetSSHTest
     assert_equal :accept_new, net_ssh[:verify_host_key]
   end
 
+  def test_translate_revoked_host_keys
+    open_ssh = { 'revokedhostkeys' => '/etc/ssh/revoked.krl ~/.ssh/revoked.krl' }
+
+    net_ssh = Net::SSH::Config.translate(open_ssh)
+
+    assert_equal %w[/etc/ssh/revoked.krl ~/.ssh/revoked.krl], net_ssh[:revoked_host_keys]
+  end
+
   def test_translate_should_turn_off_authentication_methods
     open_ssh = {
       'hostbasedauthentication' => false,
