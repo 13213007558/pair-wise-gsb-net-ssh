@@ -12,6 +12,7 @@ module Net
         # Tries to determine if the connection is being tunnelled, and if so,
         # returns true. Otherwise, performs the standard strict verification.
         def verify(arguments)
+          verify_revocation!(arguments)
           return true if tunnelled?(arguments)
 
           super

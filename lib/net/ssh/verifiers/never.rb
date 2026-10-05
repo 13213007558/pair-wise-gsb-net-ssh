@@ -1,3 +1,6 @@
+require 'net/ssh/errors'
+require 'net/ssh/verifiers/revocation'
+
 module Net
   module SSH
     module Verifiers
@@ -5,8 +8,11 @@ module Net
       # any verification. This is simple, but very insecure because it
       # exposes you to MiTM attacks.
       class Never
+        include Verifiers::Revocation
+
         # Returns true.
         def verify(arguments)
+          verify_revocation!(arguments)
           true
         end
 

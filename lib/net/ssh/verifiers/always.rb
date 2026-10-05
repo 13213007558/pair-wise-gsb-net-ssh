@@ -1,5 +1,6 @@
 require 'net/ssh/errors'
 require 'net/ssh/known_hosts'
+require 'net/ssh/verifiers/revocation'
 
 module Net
   module SSH
@@ -13,7 +14,11 @@ module Net
       # exception will be raised (HostKeyMismatch).
       # Otherwise, this returns true.
       class Always
+        include Revocation
+
         def verify(arguments)
+          verify_revocation!(arguments)
+
           host_keys = arguments[:session].host_keys
 
           # We've never seen this host before, so raise an exception.

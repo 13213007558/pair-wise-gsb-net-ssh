@@ -96,6 +96,9 @@ module Net
     # method on the exception, and then retry.
     class HostKeyMismatch < HostKeyError; end
 
+    # Raised when the host key or its certificate is listed as revoked.
+    class HostKeyRevoked < HostKeyError; end
+
     # Raised when there is no cached key for a particular host, which probably
     # means that the host has simply not been seen before.
     # When rescuing this exception, you can inspect the key fingerprint and, if
