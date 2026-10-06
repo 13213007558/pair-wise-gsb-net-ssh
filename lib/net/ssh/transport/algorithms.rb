@@ -23,6 +23,15 @@ module Net
         include Loggable
         include Constants
 
+        # Extension name advertised by a strict-KEX capable client in its
+        # KEXINIT proposal. See the OpenSSH strict KEX extension
+        # (CVE-2023-48795, "Terrapin").
+        STRICT_KEX_CLIENT = "kex-strict-c-v00@openssh.com"
+
+        # Extension name advertised by a strict-KEX capable server in its
+        # KEXINIT proposal.
+        STRICT_KEX_SERVER = "kex-strict-s-v00@openssh.com"
+
         # Define the default algorithms, in order of preference, supported by Net::SSH.
         DEFAULT_ALGORITHMS = {
           host_key: %w[ecdsa-sha2-nistp521-cert-v01@openssh.com
@@ -146,6 +155,12 @@ module Net
         # The session-id for this session, as decided during the initial key exchange.
         attr_reader :session_id
 
+        # Returns true when the connection negotiated OpenSSH strict key
+        # exchange mode with the peer.
+        def strict_kex?
+          @strict_kex
+        end
+
         # Returns true if the given packet can be processed during a key-exchange.
         def self.allowed_packet?(packet)
           (1..4).include?(packet.type) ||
@@ -161,6 +176,8 @@ module Net
           @options = options
           @algorithms = {}
           @pending = @initialized = false
+          @initial_kex = true
+          @strict_kex = false
           @client_packet = @server_packet = nil
           prepare_preferred_algorithms!
         end
@@ -190,6 +207,7 @@ module Net
           info { "got KEXINIT from server" }
           @server_data = parse_server_algorithm_packet(packet)
           @server_packet = @server_data[:raw]
+          negotiate_strict_kex!
           if !pending?
             send_kexinit
           else
@@ -234,6 +252,33 @@ module Net
         end
 
         private
+
+        # Detects the strict KEX extension in the server's KEXINIT proposal.
+        # The extension name is never negotiated as a real key exchange
+        # algorithm, so it is removed from the server's proposal before
+        # algorithm negotiation runs.
+        def negotiate_strict_kex!
+          peer_strict = @server_data[:kex].delete(STRICT_KEX_SERVER)
+
+          if @initial_kex
+            if peer_strict
+              # The server's first KEXINIT must be the very first packet the
+              # client receives; any packet injected before it shifts the
+              # receive sequence number away from its initial value.
+              if session.socket.server.sequence_number != 1
+                raise Net::SSH::ProtocolError,
+                      "peer used strict KEX extension but its initial KEXINIT was not the first packet"
+              end
+
+              @strict_kex = true
+              debug { "peer supports strict KEX; entering strict key exchange mode" }
+            end
+            @initial_kex = false
+          elsif @strict_kex && !peer_strict
+            raise Net::SSH::ProtocolError,
+                  "strict KEX was negotiated but peer omitted the strict KEX extension during rekey"
+          end
+        end
 
         # Sends a KEXINIT packet to the server. If a server KEXINIT has already
         # been received, this will then invoke #proceed! to proceed with the key
@@ -370,7 +415,7 @@ module Net
         # a KEXINIT packet to send to the server. It does not actually send it,
         # it simply builds the packet and returns it.
         def build_client_algorithm_packet
-          kex         = algorithms[:kex].join(",")
+          kex         = ([STRICT_KEX_CLIENT] + algorithms[:kex]).join(",")
           host_key    = algorithms[:host_key].join(",")
           encryption  = algorithms[:encryption].join(",")
           hmac        = algorithms[:hmac].join(",")

@@ -198,12 +198,21 @@ module Net
               raise Net::SSH::Disconnect, "disconnected: #{packet[:description]} (#{packet[:reason_code]})"
 
             when IGNORE
+              if algorithms.strict_kex? && algorithms.pending?
+                raise Net::SSH::ProtocolError, "IGNORE packet received during strict key exchange"
+              end
               debug { "IGNORE packet received: #{packet[:data].inspect}" }
 
             when UNIMPLEMENTED
+              if algorithms.strict_kex? && algorithms.pending?
+                raise Net::SSH::ProtocolError, "UNIMPLEMENTED packet received during strict key exchange"
+              end
               lwarn { "UNIMPLEMENTED: #{packet[:number]}" }
 
             when DEBUG
+              if algorithms.strict_kex? && algorithms.pending?
+                raise Net::SSH::ProtocolError, "DEBUG packet received during strict key exchange"
+              end
               send(packet[:always_display] ? :fatal : :debug) { packet[:message] }
 
             when KEXINIT
@@ -211,6 +220,11 @@ module Net
 
             else
               return packet if algorithms.allow?(packet)
+
+              # Under strict key exchange no packet outside of the key
+              # exchange may be interleaved, even one that would normally be
+              # queued for processing after the exchange completes.
+              raise Net::SSH::ProtocolError, "packet type #{packet.type} received during strict key exchange" if algorithms.strict_kex?
 
               push(packet)
             end
@@ -261,6 +275,18 @@ module Net
         # hmac algorithms to use when reading packets from the server.
         def configure_server(options = {})
           socket.server.set(options)
+        end
+
+        # Resets the outgoing packet sequence number. Invoked at the client's
+        # NEWKEYS boundary under strict key exchange.
+        def reset_client_sequence_number!
+          socket.client.reset_sequence_number!
+        end
+
+        # Resets the incoming packet sequence number. Invoked at the server's
+        # NEWKEYS boundary under strict key exchange.
+        def reset_server_sequence_number!
+          socket.server.reset_sequence_number!
         end
 
         # Sets a new hint for the packet stream, which the packet stream may use

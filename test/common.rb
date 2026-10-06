@@ -114,9 +114,32 @@ class MockTransport < Net::SSH::Transport::Session
     @expectations = []
     @queue = []
     @hints = {}
-    @socket = options[:socket]
+    @socket = options[:socket] || MockSocketState.new
     @algorithms = OpenStruct.new(session_id: "abcxyz123")
     verifier { |_data| true }
+  end
+
+  # Minimal packet stream stand-in exposing only the state objects the
+  # algorithms object consults during (strict) key exchange.
+  class MockSocketState
+    attr_reader :client, :server
+
+    def initialize
+      @client = MockEndpointState.new
+      @server = MockEndpointState.new
+    end
+
+    class MockEndpointState
+      attr_accessor :sequence_number
+
+      def initialize
+        @sequence_number = 0
+      end
+
+      def reset_sequence_number!
+        @sequence_number = 0
+      end
+    end
   end
 
   def send_message(message)
@@ -167,6 +190,14 @@ class MockTransport < Net::SSH::Transport::Session
 
   def configure_client(options)
     @client_options = options
+  end
+
+  def reset_client_sequence_number!
+    socket.client.reset_sequence_number!
+  end
+
+  def reset_server_sequence_number!
+    socket.server.reset_sequence_number!
   end
 
   def configure_server(options)

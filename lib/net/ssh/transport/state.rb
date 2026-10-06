@@ -97,6 +97,12 @@ module Net
           @blocks += (packet_length + 4) / @block_size
         end
 
+        # Resets the packet sequence number to zero. Used by the OpenSSH
+        # strict KEX extension at each direction's NEWKEYS boundary.
+        def reset_sequence_number!
+          @sequence_number = 0
+        end
+
         # The compressor object to use when compressing data. This takes into account
         # the desired compression level.
         def compressor

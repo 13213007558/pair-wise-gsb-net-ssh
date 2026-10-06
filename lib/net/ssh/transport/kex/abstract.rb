@@ -117,11 +117,19 @@ module Net
             # send own NEWKEYS message first (the wodSSHServer won't send first)
             response = Net::SSH::Buffer.new
             response.write_byte(NEWKEYS)
+
+            # Under strict KEX each direction resets its own packet sequence
+            # number at its own NEWKEYS boundary. The send direction resets
+            # before our NEWKEYS is MAC'd and emitted; the receive direction
+            # resets only after the server's NEWKEYS has been read and verified.
+            connection.reset_client_sequence_number! if algorithms.strict_kex?
             connection.send_message(response)
 
             # wait for the server's NEWKEYS message
             buffer = connection.next_message
             raise Net::SSH::Exception, 'expected NEWKEYS' unless buffer.type == NEWKEYS
+
+            connection.reset_server_sequence_number! if algorithms.strict_kex?
           end
         end
       end

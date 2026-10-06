@@ -15,6 +15,11 @@ module Net
     # unexpectedly.
     class Disconnect < Net::SSH::Exception; end
 
+    # This exception is raised when the remote end sends a packet that is not
+    # allowed by the SSH protocol in the current state (for example, an
+    # extraneous packet interleaved into a strict key exchange).
+    class ProtocolError < Net::SSH::Exception; end
+
     # This exception is raised when the remote host has disconnected/
     # timeouted unexpectedly.
     class Timeout < Disconnect; end

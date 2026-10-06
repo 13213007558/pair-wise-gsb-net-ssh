@@ -1,6 +1,7 @@
 === 8.0.0 beta3
 
   * Verify @cert-authority host certificate constraints — principals (shell-glob, matching OpenSSH), validity window, host type, and critical options — instead of trusting any CA-signed certificate for any host [#1009]
+  * Support OpenSSH strict key exchange extension ("Terrapin", CVE-2023-48795): advertise kex-strict-c-v00@openssh.com, enter strict mode when the peer advertises the matching extension, reject non key-exchange messages interleaved into an exchange, and reset each direction's packet sequence number at its own NEWKEYS boundary
 
 === 7.3.3
 

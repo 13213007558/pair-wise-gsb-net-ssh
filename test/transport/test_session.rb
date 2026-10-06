@@ -399,7 +399,7 @@ module Transport
     end
 
     def algorithms
-      @algorithms ||= stub("algorithms", initialized?: true, allow?: true, start: true)
+      @algorithms ||= stub("algorithms", initialized?: true, allow?: true, start: true, pending?: false, strict_kex?: false)
     end
 
     def session(options = {})
