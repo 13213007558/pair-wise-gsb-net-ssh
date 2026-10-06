@@ -68,7 +68,7 @@ module Net
           end
 
           ossl_name = SSH_TO_OSSL[name] or raise NotImplementedError, "unimplemented cipher `#{name}'"
-          return IdentityCipher if ossl_name == "none"
+          return IdentityCipher.dup if ossl_name == "none"
 
           cipher = OpenSSL::Cipher.new(ossl_name)
 

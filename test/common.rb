@@ -165,12 +165,14 @@ class MockTransport < Net::SSH::Transport::Session
     @host_key_verifier = BlockVerifier.new(block)
   end
 
-  def configure_client(options)
+  def configure_client(options = {}, reset_sequence: false)
     @client_options = options
+    @client_reset_sequence = reset_sequence
   end
 
-  def configure_server(options)
+  def configure_server(options = {}, reset_sequence: false)
     @server_options = options
+    @server_reset_sequence = reset_sequence
   end
 
   def hint(name, value = true)

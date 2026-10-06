@@ -47,15 +47,14 @@ module Net
           def exchange_keys
             result = send_kexinit
             verify_server_key(result[:server_key])
-            session_id = verify_signature(result)
-            confirm_newkeys
+            exchange_hash = verify_signature(result)
+            result[:session_id] = exchange_hash
+            result[:hashing_algorithm] = digester
+            confirm_newkeys(result) do |direction|
+              yield direction, result if block_given?
+            end
 
-            {
-              session_id: session_id,
-              server_key: result[:server_key],
-              shared_secret: result[:shared_secret],
-              hashing_algorithm: digester
-            }
+            result
           end
 
           def digester
@@ -113,15 +112,30 @@ module Net
 
           # Send the NEWKEYS message, and expect the NEWKEYS message in
           # reply.
-          def confirm_newkeys # :nodoc:
+          def confirm_newkeys(result) # :nodoc:
             # send own NEWKEYS message first (the wodSSHServer won't send first)
             response = Net::SSH::Buffer.new
             response.write_byte(NEWKEYS)
+            yield :client_keys, result if block_given?
             connection.send_message(response)
 
             # wait for the server's NEWKEYS message
             buffer = connection.next_message
             raise Net::SSH::Exception, 'expected NEWKEYS' unless buffer.type == NEWKEYS
+            yield :server_keys, result if block_given?
+          end
+
+          def expect_message(type)
+            buffer = connection.next_message
+            error = algorithms.strict_kex_packet_error(buffer) if strict_exchange?
+            raise Net::SSH::Exception, error if error
+            raise Net::SSH::Exception, "expected #{type}" unless buffer.type == type
+
+            buffer
+          end
+
+          def strict_exchange?
+            algorithms.respond_to?(:strict_kex) && algorithms.strict_kex
           end
         end
       end

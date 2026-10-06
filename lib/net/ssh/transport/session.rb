@@ -197,22 +197,29 @@ module Net
             when DISCONNECT
               raise Net::SSH::Disconnect, "disconnected: #{packet[:description]} (#{packet[:reason_code]})"
 
-            when IGNORE
-              debug { "IGNORE packet received: #{packet[:data].inspect}" }
-
-            when UNIMPLEMENTED
-              lwarn { "UNIMPLEMENTED: #{packet[:number]}" }
-
-            when DEBUG
-              send(packet[:always_display] ? :fatal : :debug) { packet[:message] }
-
-            when KEXINIT
-              algorithms.accept_kexinit(packet)
-
             else
-              return packet if algorithms.allow?(packet)
+              if algorithms.strict_kex_packet_error(packet)
+                raise Net::SSH::Exception, "unexpected packet type #{packet.type} during strict key exchange"
+              end
 
-              push(packet)
+              case packet.type
+              when IGNORE
+                debug { "IGNORE packet received: #{packet[:data].inspect}" }
+
+              when UNIMPLEMENTED
+                lwarn { "UNIMPLEMENTED: #{packet[:number]}" }
+
+              when DEBUG
+                send(packet[:always_display] ? :fatal : :debug) { packet[:message] }
+
+              when KEXINIT
+                algorithms.accept_kexinit(packet)
+
+              else
+                return packet if algorithms.allow?(packet)
+
+                push(packet)
+              end
             end
           end
         end
@@ -252,15 +259,17 @@ module Net
         # Configure's the packet stream's client state with the given set of
         # options. This is typically used to define the cipher, compression, and
         # hmac algorithms to use when sending packets to the server.
-        def configure_client(options = {})
-          socket.client.set(options)
+        def configure_client(options = nil, reset_sequence: false, **keyword_options)
+          options = keyword_options if options.nil?
+          socket.client.set(options, reset_sequence: reset_sequence)
         end
 
         # Configure's the packet stream's server state with the given set of
         # options. This is typically used to define the cipher, compression, and
         # hmac algorithms to use when reading packets from the server.
-        def configure_server(options = {})
-          socket.server.set(options)
+        def configure_server(options = nil, reset_sequence: false, **keyword_options)
+          options = keyword_options if options.nil?
+          socket.server.set(options, reset_sequence: reset_sequence)
         end
 
         # Sets a new hint for the packet stream, which the packet stream may use

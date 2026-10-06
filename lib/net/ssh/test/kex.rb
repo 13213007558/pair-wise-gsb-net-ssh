@@ -32,10 +32,14 @@ module Net
           buffer = @connection.next_message
           raise Net::SSH::Exception, "expected NEWKEYS" unless buffer.type == NEWKEYS
 
-          { session_id: "abc-xyz",
-            server_key: OpenSSL::PKey::RSA.new(512),
-            shared_secret: OpenSSL::BN.new("1234567890", 10),
-            hashing_algorithm: OpenSSL::Digest::SHA1 }
+          result = { session_id: "abc-xyz",
+                     server_key: OpenSSL::PKey::RSA.new(512),
+                     shared_secret: OpenSSL::BN.new("1234567890", 10),
+                     hashing_algorithm: OpenSSL::Digest::SHA1 }
+          yield :client_keys, result if block_given?
+          yield :server_keys, result if block_given?
+
+          result
         end
       end
     end

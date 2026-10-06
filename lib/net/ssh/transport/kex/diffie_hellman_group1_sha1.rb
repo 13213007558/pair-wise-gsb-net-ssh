@@ -94,8 +94,7 @@ module Net
             connection.send_message(buffer)
 
             # expect the KEXDH_REPLY message
-            buffer = connection.next_message
-            raise Net::SSH::Exception, "expected REPLY" unless buffer.type == reply
+            buffer = expect_message(reply)
 
             result = Hash.new
 

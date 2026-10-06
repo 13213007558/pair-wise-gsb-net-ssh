@@ -23,6 +23,9 @@ module Net
         include Loggable
         include Constants
 
+        STRICT_KEX_CLIENT = 'kex-strict-c-v00@openssh.com'
+        STRICT_KEX_SERVER = 'kex-strict-s-v00@openssh.com'
+
         # Define the default algorithms, in order of preference, supported by Net::SSH.
         DEFAULT_ALGORITHMS = {
           host_key: %w[ecdsa-sha2-nistp521-cert-v01@openssh.com
@@ -146,6 +149,9 @@ module Net
         # The session-id for this session, as decided during the initial key exchange.
         attr_reader :session_id
 
+        # Whether strict key exchange has been negotiated for this connection.
+        attr_reader :strict_kex
+
         # Returns true if the given packet can be processed during a key-exchange.
         def self.allowed_packet?(packet)
           (1..4).include?(packet.type) ||
@@ -161,6 +167,8 @@ module Net
           @options = options
           @algorithms = {}
           @pending = @initialized = false
+          @strict_kex = false
+          @strict_kex_locked = false
           @client_packet = @server_packet = nil
           prepare_preferred_algorithms!
         end
@@ -188,6 +196,9 @@ module Net
         # way, this will block until the key exchange completes.
         def accept_kexinit(packet)
           info { "got KEXINIT from server" }
+          if pending? && strict_kex && @server_packet
+            raise Net::SSH::Exception, "unexpected KEXINIT during strict key exchange"
+          end
           @server_data = parse_server_algorithm_packet(packet)
           @server_packet = @server_data[:raw]
           if !pending?
@@ -217,6 +228,14 @@ module Net
         # during a key exchange.
         def allow?(packet)
           !pending? || Algorithms.allowed_packet?(packet)
+        end
+
+        def strict_kex_packet_error(packet)
+          return nil unless pending? && strict_kex
+          return nil if packet.type == DISCONNECT || packet.type == NEWKEYS
+          return nil if packet.type == KEXINIT || (30..49).include?(packet.type)
+
+          "unexpected packet type #{packet.type} during strict key exchange"
         end
 
         # Returns true if the algorithms have been negotiated at all.
@@ -273,6 +292,7 @@ module Net
               options[:append_all_supported_algorithms]
             )
           end
+          algorithms[:kex] << STRICT_KEX_CLIENT unless algorithms[:kex].include?(STRICT_KEX_CLIENT)
 
           # for convention, make sure our list has the same keys as the server
           # list
@@ -347,7 +367,9 @@ module Net
 
           packet.read(16) # skip the cookie value
 
-          data[:kex]                = packet.read_string.split(/,/)
+          kex_algorithms = packet.read_string.split(/,/)
+          data[:server_strict_kex] = kex_algorithms.include?(STRICT_KEX_SERVER)
+          data[:kex]                = kex_algorithms
           data[:host_key]           = packet.read_string.split(/,/)
           data[:encryption_client]  = packet.read_string.split(/,/)
           data[:encryption_server]  = packet.read_string.split(/,/)
@@ -389,6 +411,7 @@ module Net
         # in common and set those as the selected algorithms. If, for any algorithm,
         # no type can be settled on, an exception is raised.
         def negotiate_algorithms
+          negotiate_strict_kex
           @kex                = negotiate(:kex)
           @host_key           = negotiate(:host_key)
           @encryption_client  = negotiate(:encryption_client)
@@ -413,7 +436,9 @@ module Net
         # server and those set by the client. This is called by
         # #negotiate_algorithms.
         def negotiate(algorithm)
-          match = self[algorithm].find { |item| @server_data[algorithm].include?(item) }
+          preferences = self[algorithm].dup
+          preferences.delete(STRICT_KEX_CLIENT) if algorithm == :kex
+          match = preferences.find { |item| @server_data[algorithm].include?(item) }
 
           if match.nil?
             raise Net::SSH::Exception, "could not settle on #{algorithm} algorithm\n"\
@@ -422,6 +447,29 @@ module Net
           end
 
           return match
+        end
+
+        def negotiate_strict_kex
+          @strict_kex =
+            if @strict_kex_locked
+              strict_kex
+            else
+              self[:kex].include?(STRICT_KEX_CLIENT) && @server_data[:server_strict_kex]
+            end
+          @strict_kex_locked = true
+
+          verify_initial_kex_sequence! if @session_id.nil? && strict_kex
+        end
+
+        def verify_initial_kex_sequence!
+          return unless session.respond_to?(:socket)
+          return unless session.socket.respond_to?(:server)
+
+          received_packets = session.socket.server.sequence_number
+          return if received_packets == 1
+
+          raise Net::SSH::Exception,
+                "unexpected packets before KEXINIT during strict key exchange"
         end
 
         # Considers the sizes of the keys and block-sizes for the selected ciphers,
@@ -455,8 +503,20 @@ module Net
                                         need_bytes: need_bytes,
                                         minimum_dh_bits: options[:minimum_dh_bits],
                                         logger: logger)
-          result = algorithm.exchange_keys
+          result = nil
+          result = algorithm.exchange_keys do |direction, exchange_result|
+            next unless strict_kex
+            install_exchange_keys(exchange_result, direction)
+          end
+          unless strict_kex
+            install_exchange_keys(result, :client_keys)
+            install_exchange_keys(result, :server_keys)
+          end
 
+          @initialized = true
+        end
+
+        def install_exchange_keys(result, direction)
           secret   = result[:shared_secret].to_ssh
           hash     = result[:session_id]
           digester = result[:hashing_algorithm]
@@ -464,55 +524,55 @@ module Net
           @session_id ||= hash
 
           key = Proc.new { |salt| digester.digest(secret + hash + salt + @session_id) }
-
-          iv_client = key["A"]
-          iv_server = key["B"]
-          key_client = key["C"]
-          key_server = key["D"]
-          mac_key_client = key["E"]
-          mac_key_server = key["F"]
-
           parameters = { shared: secret, hash: hash, digester: digester }
 
-          cipher_client = CipherFactory.get(
-            encryption_client,
-            parameters.merge(iv: iv_client, key: key_client, encrypt: true)
-          )
-          cipher_server = CipherFactory.get(
-            encryption_server,
-            parameters.merge(iv: iv_server, key: key_server, decrypt: true)
-          )
+          if direction == :client_keys
+            iv = key["A"]
+            cipher = CipherFactory.get(
+              encryption_client,
+              parameters.merge(iv: iv, key: key["C"], encrypt: true)
+            )
+            mac =
+              if cipher.implicit_mac?
+                cipher.implicit_mac
+              else
+                HMAC.get(hmac_client, key["E"], parameters)
+              end
+            cipher.nonce = iv if mac.respond_to?(:aead) && mac.aead
 
-          mac_client =
-            if cipher_client.implicit_mac?
-              cipher_client.implicit_mac
-            else
-              HMAC.get(hmac_client, mac_key_client, parameters)
-            end
-          mac_server =
-            if cipher_server.implicit_mac?
-              cipher_server.implicit_mac
-            else
-              HMAC.get(hmac_server, mac_key_server, parameters)
-            end
+            session.configure_client({
+              cipher: cipher,
+              hmac: mac,
+              compression: normalize_compression_name(compression_client),
+              compression_level: options[:compression_level],
+              rekey_limit: options[:rekey_limit],
+              max_packets: options[:rekey_packet_limit],
+              max_blocks: options[:rekey_blocks_limit]
+            }, reset_sequence: strict_kex)
+          else
+            iv = key["B"]
+            cipher = CipherFactory.get(
+              encryption_server,
+              parameters.merge(iv: iv, key: key["D"], decrypt: true)
+            )
+            mac =
+              if cipher.implicit_mac?
+                cipher.implicit_mac
+              else
+                HMAC.get(hmac_server, key["F"], parameters)
+              end
+            cipher.nonce = iv if mac.respond_to?(:aead) && mac.aead
 
-          cipher_client.nonce = iv_client if mac_client.respond_to?(:aead) && mac_client.aead
-          cipher_server.nonce = iv_server if mac_server.respond_to?(:aead) && mac_client.aead
-
-          session.configure_client cipher: cipher_client, hmac: mac_client,
-                                   compression: normalize_compression_name(compression_client),
-                                   compression_level: options[:compression_level],
-                                   rekey_limit: options[:rekey_limit],
-                                   max_packets: options[:rekey_packet_limit],
-                                   max_blocks: options[:rekey_blocks_limit]
-
-          session.configure_server cipher: cipher_server, hmac: mac_server,
-                                   compression: normalize_compression_name(compression_server),
-                                   rekey_limit: options[:rekey_limit],
-                                   max_packets: options[:rekey_packet_limit],
-                                   max_blocks: options[:rekey_blocks_limit]
-
-          @initialized = true
+            session.configure_server({
+              cipher: cipher,
+              hmac: mac,
+              compression: normalize_compression_name(compression_server),
+              rekey_limit: options[:rekey_limit],
+              max_packets: options[:rekey_packet_limit],
+              max_blocks: options[:rekey_blocks_limit],
+              reset_sequence: strict_kex
+            })
+          end
         end
 
         # Given the SSH name for some compression algorithm, return a normalized

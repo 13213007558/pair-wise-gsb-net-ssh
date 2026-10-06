@@ -46,8 +46,7 @@ module Net
             ## string   K_S, server's public host key
             ## string   Q_S, server's ephemeral public key octet string
             ## string   the signature on the exchange hash
-            buffer = connection.next_message
-            raise Net::SSH::Exception, 'expected REPLY' unless buffer.type == reply
+            buffer = expect_message(reply)
 
             result = {}
             result[:key_blob] = buffer.read_string

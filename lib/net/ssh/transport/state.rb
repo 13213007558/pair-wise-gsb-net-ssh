@@ -69,11 +69,17 @@ module Net
 
         # A convenience method for quickly setting multiple values in a single
         # command.
-        def set(values)
+        def set(values = nil, reset_sequence: false, **keyword_values)
+          values = keyword_values if values.nil?
           values.each do |key, value|
             instance_variable_set("@#{key}", value)
           end
+          @sequence_number = 0 if reset_sequence
           reset!
+        end
+
+        def reset_sequence!
+          @sequence_number = 0
         end
 
         def update_cipher(data)

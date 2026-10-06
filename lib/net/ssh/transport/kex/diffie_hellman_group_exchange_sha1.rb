@@ -37,8 +37,7 @@ module Net::SSH::Transport::Kex
                                      :long, data[:need_bits], :long, MAXIMUM_BITS)
       connection.send_message(buffer)
 
-      buffer = connection.next_message
-      raise Net::SSH::Exception, "expected KEXDH_GEX_GROUP, got #{buffer.type}" unless buffer.type == KEXDH_GEX_GROUP
+      buffer = expect_message(KEXDH_GEX_GROUP)
 
       p = buffer.read_bignum
       g = buffer.read_bignum

@@ -45,6 +45,15 @@ module Transport
       assert_equal 3, state.blocks
     end
 
+    def test_reset_sequence_resets_only_the_packet_sequence
+      state.increment(24)
+      state.increment(24)
+      state.reset_sequence!
+      assert_equal 0, state.sequence_number
+      assert_equal 2, state.packets
+    end
+
+
     def test_reset_should_reset_counters_and_fix_defaults_for_maximums
       state.increment(24)
       state.reset!

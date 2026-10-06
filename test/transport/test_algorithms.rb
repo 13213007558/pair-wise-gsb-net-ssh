@@ -18,7 +18,7 @@ module Transport
 
     def test_constructor_should_build_default_list_of_preferred_algorithms
       assert_equal ed_ec_host_keys + %w[ssh-rsa-cert-v01@openssh.com ssh-rsa-cert-v00@openssh.com ssh-rsa rsa-sha2-256 rsa-sha2-512], algorithms[:host_key]
-      assert_equal x25519_kex + ec_kex + %w[diffie-hellman-group-exchange-sha256 diffie-hellman-group14-sha256 diffie-hellman-group14-sha1], algorithms[:kex]
+      assert_equal x25519_kex + ec_kex + %w[diffie-hellman-group-exchange-sha256 diffie-hellman-group14-sha256 diffie-hellman-group14-sha1] + strict_kex_extension, algorithms[:kex]
       assert_equal chacha_poly_cipher + %w[aes256-ctr aes192-ctr aes128-ctr aes256-gcm@openssh.com aes128-gcm@openssh.com], algorithms[:encryption]
       assert_equal %w[hmac-sha2-512-etm@openssh.com hmac-sha2-256-etm@openssh.com hmac-sha2-512 hmac-sha2-256 hmac-sha1], algorithms[:hmac]
       assert_equal %w[none zlib@openssh.com zlib], algorithms[:compression]
@@ -27,7 +27,7 @@ module Transport
 
     def test_constructor_should_build_complete_list_of_algorithms_with_append_all_supported_algorithms
       assert_equal ed_ec_host_keys + %w[ssh-rsa-cert-v01@openssh.com ssh-rsa-cert-v00@openssh.com ssh-rsa rsa-sha2-256 rsa-sha2-512 ssh-dss], algorithms(append_all_supported_algorithms: true)[:host_key]
-      assert_equal x25519_kex + ec_kex + %w[diffie-hellman-group-exchange-sha256 diffie-hellman-group14-sha256 diffie-hellman-group14-sha1 diffie-hellman-group-exchange-sha1 diffie-hellman-group1-sha1], algorithms(append_all_supported_algorithms: true)[:kex]
+      assert_equal x25519_kex + ec_kex + %w[diffie-hellman-group-exchange-sha256 diffie-hellman-group14-sha256 diffie-hellman-group14-sha1 diffie-hellman-group-exchange-sha1 diffie-hellman-group1-sha1] + strict_kex_extension, algorithms(append_all_supported_algorithms: true)[:kex]
       assert_equal chacha_poly_cipher + %w[aes256-ctr aes192-ctr aes128-ctr aes256-gcm@openssh.com aes128-gcm@openssh.com aes256-cbc aes192-cbc aes128-cbc rijndael-cbc@lysator.liu.se blowfish-ctr blowfish-cbc cast128-ctr cast128-cbc 3des-ctr 3des-cbc idea-cbc none], algorithms(append_all_supported_algorithms: true)[:encryption]
       assert_equal %w[hmac-sha2-512-etm@openssh.com hmac-sha2-256-etm@openssh.com hmac-sha2-512 hmac-sha2-256 hmac-sha1 hmac-sha2-512-96 hmac-sha2-256-96 hmac-sha1-96 hmac-ripemd160 hmac-ripemd160@openssh.com hmac-md5 hmac-md5-96 none], algorithms(append_all_supported_algorithms: true)[:hmac]
       assert_equal %w[none zlib@openssh.com zlib], algorithms(append_all_supported_algorithms: true)[:compression]
@@ -91,6 +91,10 @@ module Transport
       end
     end
 
+    def strict_kex_extension
+      %w[kex-strict-c-v00@openssh.com]
+    end
+
     def chacha_poly_cipher
       if Net::SSH::Transport::ChaCha20Poly1305CipherLoader::LOADED
         %w[chacha20-poly1305@openssh.com]
@@ -108,22 +112,22 @@ module Transport
     end
 
     def test_constructor_with_preferred_kex_should_put_preferred_kex_first
-      assert_equal %w[diffie-hellman-group1-sha1] + x25519_kex + ec_kex + %w[diffie-hellman-group-exchange-sha256 diffie-hellman-group14-sha256 diffie-hellman-group14-sha1 diffie-hellman-group-exchange-sha1],
+      assert_equal %w[diffie-hellman-group1-sha1] + x25519_kex + ec_kex + %w[diffie-hellman-group-exchange-sha256 diffie-hellman-group14-sha256 diffie-hellman-group14-sha1 diffie-hellman-group-exchange-sha1] + strict_kex_extension,
                    algorithms(kex: "diffie-hellman-group1-sha1", append_all_supported_algorithms: true)[:kex]
     end
 
     def test_constructor_with_unrecognized_kex_should_not_raise_exception
-      assert_equal %w[diffie-hellman-group1-sha1] + x25519_kex + ec_kex + %w[diffie-hellman-group-exchange-sha256 diffie-hellman-group14-sha256 diffie-hellman-group14-sha1 diffie-hellman-group-exchange-sha1],
+      assert_equal %w[diffie-hellman-group1-sha1] + x25519_kex + ec_kex + %w[diffie-hellman-group-exchange-sha256 diffie-hellman-group14-sha256 diffie-hellman-group14-sha1 diffie-hellman-group-exchange-sha1] + strict_kex_extension,
                    algorithms(kex: %w[bogus diffie-hellman-group1-sha1], append_all_supported_algorithms: true)[:kex]
     end
 
     def test_constructor_with_preferred_kex_supports_additions
-      assert_equal x25519_kex + ec_kex + %w[diffie-hellman-group-exchange-sha256 diffie-hellman-group14-sha256 diffie-hellman-group14-sha1 diffie-hellman-group-exchange-sha1 diffie-hellman-group1-sha1],
+      assert_equal x25519_kex + ec_kex + %w[diffie-hellman-group-exchange-sha256 diffie-hellman-group14-sha256 diffie-hellman-group14-sha1 diffie-hellman-group-exchange-sha1 diffie-hellman-group1-sha1] + strict_kex_extension,
                    algorithms(kex: %w[+diffie-hellman-group1-sha1])[:kex]
     end
 
     def test_constructor_with_preferred_kex_supports_removals_with_wildcard
-      assert_equal x25519_kex + ec_kex + %w[diffie-hellman-group-exchange-sha256 diffie-hellman-group14-sha256],
+      assert_equal x25519_kex + ec_kex + %w[diffie-hellman-group-exchange-sha256 diffie-hellman-group14-sha256] + strict_kex_extension,
                    algorithms(kex: %w[-diffie-hellman-group*-sha1 -diffie-hellman-group-exchange-sha1])[:kex]
     end
 
@@ -430,7 +434,7 @@ module Transport
     def assert_kexinit(buffer, options = {})
       assert_equal KEXINIT, buffer.type
       assert_equal 16, buffer.read(16).length
-      assert_equal options[:kex] || (x25519_kex + ec_kex + %w[diffie-hellman-group-exchange-sha256 diffie-hellman-group14-sha256 diffie-hellman-group14-sha1]).join(','), buffer.read_string
+      assert_equal options[:kex] || ((x25519_kex + ec_kex + %w[diffie-hellman-group-exchange-sha256 diffie-hellman-group14-sha256 diffie-hellman-group14-sha1]) + strict_kex_extension).join(','), buffer.read_string
       assert_equal options[:host_key] || (ed_ec_host_keys + %w[ssh-rsa-cert-v01@openssh.com ssh-rsa-cert-v00@openssh.com ssh-rsa rsa-sha2-256 rsa-sha2-512]).join(','), buffer.read_string
       assert_equal options[:encryption_client] || "#{chacha_poly_cipher_str}aes256-ctr,aes192-ctr,aes128-ctr,aes256-gcm@openssh.com,aes128-gcm@openssh.com", buffer.read_string
       assert_equal options[:encryption_server] || "#{chacha_poly_cipher_str}aes256-ctr,aes192-ctr,aes128-ctr,aes256-gcm@openssh.com,aes128-gcm@openssh.com", buffer.read_string
