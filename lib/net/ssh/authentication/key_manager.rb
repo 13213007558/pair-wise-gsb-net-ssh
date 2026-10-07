@@ -208,7 +208,12 @@ module Net
             when "rsa-sha2-256"
               return agent.sign(info[:identity], data.to_s, Net::SSH::Authentication::Agent::SSH_AGENT_RSA_SHA2_256)
             else
-              return agent.sign(info[:identity], data.to_s)
+              flags = agent_flags(identity)
+              security_key = identity.respond_to?(:security_key?) && identity.security_key?
+              if flags.zero? && !security_key
+                return agent.sign(info[:identity], data.to_s)
+              end
+              return agent.sign(info[:identity], data.to_s, flags)
             end
           end
 
@@ -245,6 +250,12 @@ module Net
         end
 
         private
+
+        def agent_flags(identity)
+          return 0 unless identity.respond_to?(:security_key?) && identity.security_key?
+
+          Net::SSH::Authentication::SecurityKey.flags(options[:security_key_flags])
+        end
 
         # Load keycerts from files and data.
         def keycerts

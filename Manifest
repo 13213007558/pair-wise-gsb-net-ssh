@@ -14,6 +14,7 @@ lib/net/ssh/authentication/methods/keyboard_interactive.rb
 lib/net/ssh/authentication/methods/password.rb
 lib/net/ssh/authentication/methods/publickey.rb
 lib/net/ssh/authentication/pageant.rb
+lib/net/ssh/authentication/security_key.rb
 lib/net/ssh/authentication/session.rb
 lib/net/ssh/buffer.rb
 lib/net/ssh/buffered_io.rb

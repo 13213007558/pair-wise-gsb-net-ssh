@@ -69,7 +69,7 @@ module Net
       max_win_size send_env set_env use_agent number_of_password_prompts
       append_all_supported_algorithms non_interactive password_prompt
       agent_socket_factory minimum_dh_bits verify_host_key
-      fingerprint_hash check_host_ip pubkey_algorithms
+      fingerprint_hash check_host_ip pubkey_algorithms security_key_flags
     ]
 
     # The standard means of starting a new SSH connection. When used with a
@@ -173,6 +173,9 @@ module Net
     #   'ssh-rsa-cert-v01@openssh.com', 'rsa-sha2-256', 'ssh-rsa'. Currently, this
     #   option is only used for RSA public key authentication and ignored for other
     #   types.
+    # * :security_key_flags => the FIDO flags requested from ssh-agent for security
+    #   keys. Defaults to user presence required (1); use 0 for no-touch-required
+    #   keys, 4 for user verification, or 5 for both presence and verification.
     # * :rekey_blocks_limit => the max number of blocks to process before rekeying
     # * :rekey_limit => the max number of bytes to process before rekeying
     # * :rekey_packet_limit => the max number of packets to process before rekeying

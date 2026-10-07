@@ -2,6 +2,7 @@ require 'net/ssh/transport/openssl'
 require 'net/ssh/prompt'
 
 require 'net/ssh/authentication/ed25519_loader'
+require 'net/ssh/authentication/security_key'
 
 module Net
   module SSH
@@ -23,6 +24,10 @@ module Net
         'ecdsa' => OpenSSL::PKey::EC
       }
       MAP["ed25519"] = Net::SSH::Authentication::ED25519::PrivKey if defined? Net::SSH::Authentication::ED25519
+
+      PUBLIC_KEY_TYPES = /^(?:(?:ssh-(?:rsa|dss|ed25519)|ecdsa-sha2-nistp\d+)
+                          (?:-cert-v01@openssh\.com)?|sk-ssh-ed25519@openssh\.com|
+                          sk-ecdsa-sha2-nistp256@openssh\.com)$/x.freeze
 
       class << self
         # Fetch an OpenSSL key instance by its SSH name. It will be a new,
@@ -92,7 +97,7 @@ module Net
           blob = nil
           begin
             blob = fields.shift
-          end while !blob.nil? && !/^(ssh-(rsa|dss|ed25519)|ecdsa-sha2-nistp\d+)(-cert-v01@openssh\.com)?$/.match(blob)
+          end while !blob.nil? && !PUBLIC_KEY_TYPES.match?(blob)
           blob = fields.shift
 
           raise Net::SSH::Exception, "public key at #{filename} is not valid" if blob.nil?

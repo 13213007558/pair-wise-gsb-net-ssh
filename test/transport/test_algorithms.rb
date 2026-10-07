@@ -55,7 +55,9 @@ module Transport
 
     def ed_host_keys
       if Net::SSH::Authentication::ED25519Loader::LOADED
-        %w[ssh-ed25519-cert-v01@openssh.com ssh-ed25519]
+        %w[ssh-ed25519-cert-v01@openssh.com
+           ssh-ed25519
+           sk-ssh-ed25519@openssh.com]
       else
         []
       end
@@ -65,6 +67,7 @@ module Transport
       %w[ecdsa-sha2-nistp521-cert-v01@openssh.com
          ecdsa-sha2-nistp384-cert-v01@openssh.com
          ecdsa-sha2-nistp256-cert-v01@openssh.com
+         sk-ecdsa-sha2-nistp256@openssh.com
          ecdsa-sha2-nistp521
          ecdsa-sha2-nistp384
          ecdsa-sha2-nistp256]
@@ -200,7 +203,7 @@ module Transport
     end
 
     def test_constructor_with_host_key_removals_with_wildcard
-      assert_equal ed_host_keys + %w[ecdsa-sha2-nistp521-cert-v01@openssh.com ecdsa-sha2-nistp384-cert-v01@openssh.com ecdsa-sha2-nistp256-cert-v01@openssh.com ecdsa-sha2-nistp521 ecdsa-sha2-nistp384 ecdsa-sha2-nistp256], algorithms(host_key: %w[-ssh-rsa* -ssh-dss -rsa-sha*])[:host_key]
+      assert_equal ed_host_keys + ec_host_keys, algorithms(host_key: %w[-ssh-rsa* -ssh-dss -rsa-sha*])[:host_key]
     end
 
     def test_initial_state_should_be_neither_pending_nor_initialized

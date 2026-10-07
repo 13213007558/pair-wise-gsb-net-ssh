@@ -41,6 +41,8 @@ Unsecure algoritms will definitely be removed in Net::SSH 8.*.
 |----------------------|-----------------------|----------|
 | ssh-rsa              | OK                    |          |
 | ssh-ed25519          | OK                    | Backed by Ruby OpenSSL raw Ed25519 APIs (`openssl >= 3.2.0`) |
+| sk-ssh-ed25519@openssh.com | OK              | Public key and signature verification only; signing is delegated to ssh-agent |
+| sk-ecdsa-sha2-nistp256@openssh.com | OK      | Public key and signature verification only; signing is delegated to ssh-agent |
 | ecdsa-sha2-nistp521  | OK                    | [using weak elliptic curves](https://safecurves.cr.yp.to/) |
 | ecdsa-sha2-nistp384  | OK                    | [using weak elliptic curves](https://safecurves.cr.yp.to/) |
 | ecdsa-sha2-nistp256  | OK                    | [using weak elliptic curves](https://safecurves.cr.yp.to/) |

@@ -60,6 +60,9 @@ module Net
         SSH_AGENT_RSA_SHA2_256 = 0x02
         SSH_AGENT_RSA_SHA2_512 = 0x04
 
+        SSH_AGENT_USER_PRESENCE_REQUIRED = 1
+        SSH_AGENT_USER_VERIFICATION_REQUIRED = 4
+
         # The underlying socket being used to communicate with the SSH agent.
         attr_reader :socket
 

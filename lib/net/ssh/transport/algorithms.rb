@@ -28,6 +28,7 @@ module Net
           host_key: %w[ecdsa-sha2-nistp521-cert-v01@openssh.com
                        ecdsa-sha2-nistp384-cert-v01@openssh.com
                        ecdsa-sha2-nistp256-cert-v01@openssh.com
+                       sk-ecdsa-sha2-nistp256@openssh.com
                        ecdsa-sha2-nistp521
                        ecdsa-sha2-nistp384
                        ecdsa-sha2-nistp256
@@ -63,7 +64,8 @@ module Net
         if Net::SSH::Authentication::ED25519Loader::LOADED
           DEFAULT_ALGORITHMS[:host_key].unshift(
             'ssh-ed25519-cert-v01@openssh.com',
-            'ssh-ed25519'
+            'ssh-ed25519',
+            'sk-ssh-ed25519@openssh.com'
           )
         end
 

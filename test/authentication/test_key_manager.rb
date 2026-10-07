@@ -326,6 +326,35 @@ module Authentication
       assert_equal "abcxyz123", manager.sign(rsa_pk, "hello, world")
     end
 
+    def test_sign_with_security_key_requests_user_presence_by_default
+      identity = stub_security_key_identity
+      manager.stubs(:agent).returns(agent)
+      manager.known_identities[identity] = { from: :agent, identity: identity }
+      agent.expects(:sign).with(identity, "hello, world", 1).returns("signature")
+
+      assert_equal "signature", manager.sign(identity, "hello, world")
+    end
+
+    def test_sign_with_security_key_uses_configured_flags
+      identity = stub_security_key_identity
+      manager_with_flags = manager(security_key_flags: 5)
+      manager_with_flags.stubs(:agent).returns(agent)
+      manager_with_flags.known_identities[identity] = { from: :agent, identity: identity }
+      agent.expects(:sign).with(identity, "hello, world", 5).returns("signature")
+
+      assert_equal "signature", manager_with_flags.sign(identity, "hello, world")
+    end
+
+    def test_sign_with_security_key_can_disable_user_presence_request
+      identity = stub_security_key_identity
+      manager_with_flags = manager(security_key_flags: 0)
+      manager_with_flags.stubs(:agent).returns(agent)
+      manager_with_flags.known_identities[identity] = { from: :agent, identity: identity }
+      agent.expects(:sign).with(identity, "hello, world", 0).returns("signature")
+
+      assert_equal "signature", manager_with_flags.sign(identity, "hello, world")
+    end
+
     def test_sign_with_agent_originated_key_should_be_signable_through_explicitly_loaded_cert
       stub_explicit_file_cert File.expand_path("/cert"), rsa_cert
       manager.stubs(:agent).returns(agent)
@@ -371,6 +400,10 @@ module Authentication
     end
 
     private
+
+    def stub_security_key_identity
+      OpenStruct.new(security_key?: true, to_blob: "security-key-blob")
+    end
 
     def stub_file_private_key(name, key, public_key, options = {})
       manager.add(name)
