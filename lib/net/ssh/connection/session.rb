@@ -1,6 +1,7 @@
 require 'net/ssh/loggable'
 require 'net/ssh/connection/channel'
 require 'net/ssh/connection/constants'
+require 'net/ssh/connection/hostkeys_updater'
 require 'net/ssh/service/forward'
 require 'net/ssh/connection/keepalive'
 require 'net/ssh/connection/event_loop'
@@ -83,6 +84,11 @@ module Net
           @max_win_size = (options.key?(:max_win_size) ? options[:max_win_size] : 0x20000)
 
           @keepalive = Keepalive.new(self)
+
+          if options[:update_host_keys]
+            @hostkeys_updater = HostKeysUpdater.new(self)
+            on_global_request(HostKeysUpdater::REQUEST) { |data, _want_reply| @hostkeys_updater.handle(data) }
+          end
 
           @event_loop = options[:event_loop] || SingleSessionEventLoop.new
           @event_loop.register(self)

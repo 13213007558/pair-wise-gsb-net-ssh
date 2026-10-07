@@ -149,6 +149,90 @@ class TestKnownHosts < NetSSHTest
     end
   end
 
+  def test_update_appends_new_keys_and_preserves_other_entries
+    with_config_file(lines: [
+                       "# a comment",
+                       "",
+                       "other.example.com #{key_line_entry(rsa_key)}",
+                       "github.com #{key_line_entry(rsa_key2)}"
+                     ]) do |path|
+      before = File.read(path)
+      Net::SSH::KnownHosts.update('github.com', [rsa_key3], [], update_options(path))
+
+      lines = File.read(path).split("\n")
+      assert_equal before.split("\n").size + 1, lines.size
+      assert_equal "# a comment", lines[0]
+      assert_equal "", lines[1]
+      assert_equal "other.example.com #{key_line_entry(rsa_key)}", lines[2]
+      assert_equal "github.com #{key_line_entry(rsa_key2)}", lines[3]
+      assert_equal "github.com #{key_line_entry(rsa_key3)}", lines[4]
+    end
+  end
+
+  def test_update_removes_retired_keys_and_keeps_other_hosts
+    with_config_file(lines: [
+                       "other.example.com #{key_line_entry(rsa_key)}",
+                       "github.com #{key_line_entry(rsa_key2)}",
+                       "github.com #{key_line_entry(rsa_key3)}"
+                     ]) do |path|
+      Net::SSH::KnownHosts.update('github.com', [], [rsa_key2], update_options(path))
+
+      assert_equal [
+        "other.example.com #{key_line_entry(rsa_key)}",
+        "github.com #{key_line_entry(rsa_key3)}"
+      ], File.read(path).split("\n")
+    end
+  end
+
+  def test_update_removes_only_matching_pattern_from_multi_host_line
+    with_config_file(lines: [
+                       "github.com,other.example.com #{key_line_entry(rsa_key2)} comment here"
+                     ]) do |path|
+      Net::SSH::KnownHosts.update('github.com', [], [rsa_key2], update_options(path))
+
+      assert_equal ["other.example.com #{key_line_entry(rsa_key2)} comment here"], File.read(path).split("\n")
+    end
+  end
+
+  def test_update_removes_hashed_entry_with_retired_key
+    with_config_file(lines: [
+                       hashed_key_line('github.com', rsa_key2),
+                       hashed_key_line('github.com', rsa_key3),
+                       hashed_key_line('other.example.com', rsa_key2)
+                     ]) do |path|
+      Net::SSH::KnownHosts.update('github.com', [], [rsa_key2], update_options(path))
+
+      assert_equal [
+        hashed_key_line('github.com', rsa_key3),
+        hashed_key_line('other.example.com', rsa_key2)
+      ], File.read(path).split("\n")
+    end
+  end
+
+  def test_update_handles_non_default_port_entries
+    with_config_file(lines: [
+                       "[github.com]:2222 #{key_line_entry(rsa_key2)}",
+                       "other.example.com #{key_line_entry(rsa_key)}"
+                     ]) do |path|
+      Net::SSH::KnownHosts.update('[github.com]:2222', [rsa_key3], [rsa_key2], update_options(path))
+
+      assert_equal [
+        "other.example.com #{key_line_entry(rsa_key)}",
+        "[github.com]:2222 #{key_line_entry(rsa_key3)}"
+      ], File.read(path).split("\n")
+    end
+  end
+
+  def test_update_without_changes_leaves_file_untouched
+    with_config_file(lines: [
+                       "github.com #{key_line_entry(rsa_key2)}"
+                     ]) do |path|
+      before = File.read(path)
+      Net::SSH::KnownHosts.update('github.com', [], [], update_options(path))
+      assert_equal before, File.read(path)
+    end
+  end
+
   def path(relative_path)
     File.join(File.dirname(__FILE__), relative_path)
   end
@@ -159,7 +243,7 @@ class TestKnownHosts < NetSSHTest
 
   def with_config_file(lines: [], &block)
     Tempfile.open('known_hosts') do |f|
-      f.write(lines.join("\n"))
+      f.write(lines.join("\n") + "\n")
       f.close
       yield(f.path)
     end
@@ -175,6 +259,41 @@ class TestKnownHosts < NetSSHTest
       ]
     )
     OpenSSL::PKey::RSA.new(asn1.to_der)
+  end
+
+  def rsa_key2
+    asn1 = OpenSSL::ASN1::Sequence(
+      [
+        OpenSSL::ASN1::Integer(0x1122334455667700),
+        OpenSSL::ASN1::Integer(0x010001)
+      ]
+    )
+    OpenSSL::PKey::RSA.new(asn1.to_der)
+  end
+
+  def rsa_key3
+    asn1 = OpenSSL::ASN1::Sequence(
+      [
+        OpenSSL::ASN1::Integer(0xaabbccddeeff0011),
+        OpenSSL::ASN1::Integer(0x010001)
+      ]
+    )
+    OpenSSL::PKey::RSA.new(asn1.to_der)
+  end
+
+  def key_line_entry(key)
+    blob = [Net::SSH::Buffer.from(:key, key).to_s].pack("m*").gsub(/\s/, "")
+    "#{key.ssh_type} #{blob}"
+  end
+
+  def hashed_key_line(hostname, key, salt = "0123456789abcdefghij")
+    digest = OpenSSL::HMAC.digest(OpenSSL::Digest.new('sha1'), salt, hostname)
+    token = "|1|#{[salt].pack('m*').gsub(/\s/, '')}|#{[digest].pack('m*').gsub(/\s/, '')}"
+    "#{token} #{key_line_entry(key)}"
+  end
+
+  def update_options(path)
+    { user_known_hosts_file: path, global_known_hosts_file: [] }
   end
 end
 

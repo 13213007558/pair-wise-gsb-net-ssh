@@ -49,6 +49,13 @@ module Net
         # the connection is not being spoofed.
         attr_reader :host_key_verifier
 
+        # Whether the host key used for this session was found in the known
+        # hosts files before this session verified it. Recorded during key
+        # exchange when the :update_host_keys option is enabled, and used to
+        # decide whether host key updates (the hostkeys-00@openssh.com
+        # extension) may be accepted from this server.
+        attr_accessor :host_key_trusted
+
         # The hash of options that were given to the object at initialization.
         attr_reader :options
 
@@ -96,6 +103,14 @@ module Net
             known_hosts = options.fetch(:known_hosts, KnownHosts)
             known_hosts.search_for(options[:host_key_alias] || host_as_string, options)
           end
+        end
+
+        # Clears the memoized known-hosts search results, forcing them to be
+        # re-read from the known hosts files on next access. Used after the
+        # files have been updated (e.g. through the hostkeys-00@openssh.com
+        # extension).
+        def reset_host_keys!
+          @host_keys = nil
         end
 
         # Returns the host (and possibly IP address) in a format compatible with

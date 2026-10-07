@@ -292,6 +292,13 @@ module Net
             hash[:set_env] = Shellwords.split(value.to_s).map { |e| e.split '=', 2 }.to_h
           when :numberofpasswordprompts
             hash[:number_of_password_prompts] = value.to_i
+          when :updatehostkeys
+            hash[:update_host_keys] =
+              case value
+              when true then :sync
+              when 'ask' then :append
+              else false
+              end
           when :userknownhostsfile
             hash[:user_known_hosts_file] = value.split(/\s+/)
           when *TRANSLATE_CONFIG_KEY_RENAME_MAP.keys

@@ -192,6 +192,22 @@ module Net
             # try the next hostfile
           end
         end
+
+        # Applies a host-key update, as learned through the
+        # hostkeys-00@openssh.com protocol extension: entries for +host+ whose
+        # key is in +remove_keys+ are deleted from every writable user known
+        # hosts file, and +add_keys+ are appended to the first writable user
+        # known hosts file. Entries belonging to other hosts are preserved.
+        def update(host, add_keys, remove_keys, options = {})
+          unless remove_keys.empty?
+            hostfiles(options, :user).each do |file|
+              known_hosts = new(file)
+              known_hosts.remove(host, remove_keys) if File.writable?(known_hosts.source)
+            end
+          end
+
+          add_keys.each { |key| add(host, key, options) }
+        end
       end
 
       # The host-key file name that this KnownHosts instance will use to search
@@ -302,6 +318,81 @@ module Net
           blob = [Net::SSH::Buffer.from(:key, key).to_s].pack("m*").gsub(/\s/, "")
           file.puts "#{host} #{key.ssh_type} #{blob}"
         end
+      end
+
+      # Rewrites the current source file, removing every entry for +host+
+      # whose key is included in +keys+. Lines belonging to other hosts,
+      # comments and blank lines are preserved verbatim. Hashed entries that
+      # match +host+ are removed when their key matches. When a line lists
+      # several hosts, only the patterns referring to +host+ are dropped and
+      # the line is kept for the remaining hosts.
+      def remove(host, keys)
+        return if keys.nil? || keys.empty?
+        return unless File.exist?(source)
+
+        entries = host.split(/,/)
+        host_name = entries[0]
+        host_ip = entries[1]
+
+        key_blobs = keys.map { |key| [key.ssh_type, key.to_blob] }
+
+        kept = File.readlines(source).map do |line|
+          retire_line(line, host_name, host_ip, entries, key_blobs)
+        end
+
+        File.open(source, "w") { |file| file.write(kept.compact.join) }
+      end
+
+      private
+
+      # Returns nil when the whole line must be dropped, otherwise the
+      # (possibly rewritten) line to keep.
+      def retire_line(line, host_name, host_ip, entries, key_blobs)
+        if line.start_with?('@')
+          marker, hosts, type, key_content, comment = line.split(' ', 5)
+        else
+          marker = nil
+          hosts, type, key_content, comment = line.split(' ', 4)
+        end
+
+        # Keep empty lines and comments as they are
+        return line if hosts.nil? || hosts.start_with?('#')
+        return line unless SUPPORTED_TYPE.include?(type)
+
+        blob = key_content.unpack("m*").first
+        raw_key = Net::SSH::Buffer.new(blob).read_key
+        return line unless key_blobs.include?([raw_key.ssh_type, raw_key.to_blob])
+
+        hostlist = hosts.split(',')
+        remaining = hostlist.reject do |pattern|
+          host_pattern?([pattern], entries) || match(host_name, pattern) || (!host_ip.nil? && pattern == host_ip)
+        end
+
+        # The line does not refer to our host at all
+        return line if remaining.size == hostlist.size
+        # Every host on the line is ours: drop the whole line
+        return nil if remaining.empty?
+
+        rebuild_line(marker, remaining, type, key_content, comment)
+      rescue StandardError
+        # Unparseable lines are left untouched
+        line
+      end
+
+      # Indicates whether a single hashed host pattern matches one of the
+      # given host entries.
+      def host_pattern?(hostlist, entries)
+        hostlist.first =~ /\A\|1(\|.+){2}\z/ && known_host_hash?(hostlist, entries)
+      end
+
+      def rebuild_line(marker, hostlist, type, key_content, comment)
+        line = +""
+        line << "#{marker} " if marker
+        line << "#{hostlist.join(',')} #{type} #{key_content}"
+        comment = comment.chomp if comment
+        line << " #{comment}" if comment && !comment.empty?
+        line << "\n"
+        line
       end
     end
   end

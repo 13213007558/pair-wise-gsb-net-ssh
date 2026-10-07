@@ -70,6 +70,7 @@ module Net
       append_all_supported_algorithms non_interactive password_prompt
       agent_socket_factory minimum_dh_bits verify_host_key
       fingerprint_hash check_host_ip pubkey_algorithms
+      update_host_keys
     ]
 
     # The standard means of starting a new SSH connection. When used with a
@@ -216,6 +217,13 @@ module Net
     #   the +:fingerprint+ and the +:session+. Returning true accepts the host key,
     #   returning false declines it and closes the connection.
     # * :fingerprint_hash => 'MD5' or 'SHA256', defaults to 'SHA256'
+    # * :update_host_keys => enable the hostkeys-00@openssh.com extension so
+    #   that a trusted server can teach the client its new host keys. New
+    #   keys are recorded in the user known hosts files only after the
+    #   server proves possession of the corresponding private keys
+    #   (hostkeys-prove-00@openssh.com). Set to true (or :append) to only
+    #   add new keys, or to :sync to additionally remove recorded keys the
+    #   server no longer advertises. Defaults to false (disabled).
     # If +user+ parameter is nil it defaults to USER from ssh_config, or
     # local username
     def self.start(host, user = nil, options = {}, &block)

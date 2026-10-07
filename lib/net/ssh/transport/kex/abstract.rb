@@ -79,8 +79,25 @@ module Net
 
             blob, fingerprint = generate_key_fingerprint(key)
 
+            if connection.options[:update_host_keys]
+              connection.host_key_trusted = host_key_known?(connection, key)
+            end
+
             unless connection.host_key_verifier.verify(key: key, key_blob: blob, fingerprint: fingerprint, session: connection)
               raise Net::SSH::Exception, 'host key verification failed'
+            end
+          end
+
+          # Returns true if the given key was already recorded in one of the
+          # known hosts files for this host. This must be checked before the
+          # verifier runs, since a verifier may record newly seen keys.
+          def host_key_known?(connection, key) # :nodoc:
+            connection.host_keys.any? do |known_key|
+              if known_key.respond_to?(:matches_key?)
+                known_key.matches_key?(key)
+              else
+                known_key.ssh_type == key.ssh_type && known_key.to_blob == key.to_blob
+              end
             end
           end
 

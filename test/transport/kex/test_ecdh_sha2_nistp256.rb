@@ -62,7 +62,49 @@ module Transport
         assert verified
       end
 
+      def test_exchange_keys_marks_session_trusted_when_host_key_was_already_known
+        with_known_hosts_file(host_entry(server_host_key)) do |path|
+          @connection = MockTransport.new(update_host_keys: true,
+                                          user_known_hosts_file: path,
+                                          global_known_hosts_file: [])
+          assert_nothing_raised { exchange! }
+          assert_equal true, connection.host_key_trusted
+        end
+      end
+
+      def test_exchange_keys_marks_session_untrusted_when_host_key_was_not_known
+        with_known_hosts_file do |path|
+          @connection = MockTransport.new(update_host_keys: true,
+                                          user_known_hosts_file: path,
+                                          global_known_hosts_file: [])
+          assert_nothing_raised { exchange! }
+          assert_equal false, connection.host_key_trusted
+        end
+      end
+
+      def test_exchange_keys_does_not_track_trust_when_update_host_keys_is_disabled
+        with_known_hosts_file(host_entry(server_host_key)) do |path|
+          @connection = MockTransport.new(user_known_hosts_file: path,
+                                          global_known_hosts_file: [])
+          assert_nothing_raised { exchange! }
+          assert_nil connection.host_key_trusted
+        end
+      end
+
       private
+
+      def host_entry(key, host = 'net.ssh.test,127.0.0.1')
+        blob = [b(:key, key).to_s].pack('m*').gsub(/\s/, '')
+        "#{host} #{key.ssh_type} #{blob}"
+      end
+
+      def with_known_hosts_file(*lines)
+        Tempfile.open('known_hosts') do |file|
+          file.write(lines.join("\n") + "\n")
+          file.close
+          yield file.path
+        end
+      end
 
       def digester
         OpenSSL::Digest::SHA256
