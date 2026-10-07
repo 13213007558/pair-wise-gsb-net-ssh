@@ -257,8 +257,12 @@ module Net
           iqmp = read_bignum
           p = read_bignum
           q = read_bignum
-          _unkown1 = read_bignum
-          _unkown2 = read_bignum
+          unless n && e && d && iqmp && p && q
+            raise ArgumentError, "truncated rsa private key"
+          end
+          unless p * q == n
+            raise ArgumentError, "rsa private key factors do not match public modulus"
+          end
           dmp1 = d % (p - 1)
           dmq1 = d % (q - 1)
           # Public key
@@ -284,7 +288,7 @@ module Net
           asn1 = OpenSSL::ASN1::Sequence(data_sequence)
           OpenSSL::PKey::RSA.new(asn1.to_der)
         when /^ecdsa\-sha2\-(\w*)$/
-          OpenSSL::PKey::EC.read_keyblob($1, self)
+          OpenSSL::PKey::EC.read_private_keyblob($1, self)
         else
           raise Exception, "Cannot decode private key of type #{type}"
         end

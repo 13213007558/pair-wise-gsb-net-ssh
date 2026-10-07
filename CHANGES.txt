@@ -1,5 +1,12 @@
 === 8.0.0 beta3
 
+  * Load all keys from openssh-key-v1 private key containers via new
+    Net::SSH::KeyFactory.load_private_keys / load_data_private_keys (and
+    OpenSSHPrivateKeyLoader.read_all); each loaded key keeps its comment.
+    Decrypted containers are now fully verified: checkints, outer public
+    keys, inner key material, and padding, so wrong passphrases, truncated
+    containers, and mismatched keys raise instead of silently succeeding.
+    ECDSA openssh private keys now load with their private key material.
   * Verify @cert-authority host certificate constraints — principals (shell-glob, matching OpenSSH), validity window, host type, and critical options — instead of trusting any CA-signed certificate for any host [#1009]
 
 === 7.3.3

@@ -70,7 +70,18 @@ module Net
             end
           end
 
+          # Reads the first private key from an openssh-key-v1 container.
+          # Raises if the container holds no usable key.
           def self.read(datafull, password)
+            read_all(datafull, password).first
+          end
+
+          # Reads every private key stored in an openssh-key-v1 container.
+          # Returns an array of keys in container order; each key responds to
+          # +comment+ with the comment stored alongside it. Raises if the
+          # container is malformed, truncated, or cannot be decrypted with
+          # the given password.
+          def self.read_all(datafull, password)
             datafull = datafull.strip
             raise ArgumentError.new("Expected #{MBEGIN} at start of private key") unless datafull.start_with?(MBEGIN)
             raise ArgumentError.new("Expected #{MEND} at end of private key") unless datafull.end_with?(MEND)
@@ -81,34 +92,33 @@ module Net
 
             buffer = Net::SSH::Buffer.new(data[(MAGIC.size + 1)..-1])
 
-            ciphername = buffer.read_string
+            ciphername = read_string_fully(buffer, "cipher name")
             raise ArgumentError.new("#{ciphername} in private key is not supported") unless
               CipherFactory.supported?(ciphername)
 
-            kdfname = buffer.read_string
+            kdfname = read_string_fully(buffer, "kdf name")
             raise ArgumentError.new("Expected #{kdfname} to be or none or bcrypt") unless %w[none bcrypt].include?(kdfname)
 
-            kdfopts = Net::SSH::Buffer.new(buffer.read_string)
-            num_keys = buffer.read_long
-            raise ArgumentError.new("Only 1 key is supported in ssh keys #{num_keys} was in private key") unless num_keys == 1
+            kdfopts = Net::SSH::Buffer.new(read_string_fully(buffer, "kdf options"))
+            num_keys = read_long_fully(buffer, "key count")
+            raise ArgumentError.new("No keys found in private key") if num_keys < 1
 
-            _pubkey = buffer.read_string
+            public_keys = Array.new(num_keys) { read_string_fully(buffer, "public key") }
 
-            len = buffer.read_long
-            encrypted_private = buffer.read(len)
+            len = read_long_fully(buffer, "private key block length")
+            encrypted_private = read_fully(buffer, len, "private key block")
 
             keylen, blocksize, ivlen = CipherFactory.get_lengths(ciphername, iv_len: true)
             raise ArgumentError.new("Private key len:#{len} is not a multiple of #{blocksize}") if
               (len < blocksize) || ((blocksize > 0) && (len % blocksize) != 0)
 
-            raise ArgumentError.new("Private key len:#{len} exceeds available data") unless encrypted_private.bytesize == len
-
             authlen = CipherFactory.auth_length(ciphername)
-            auth_tag = authlen > 0 ? buffer.read(authlen) : nil
+            auth_tag = authlen > 0 ? read_fully(buffer, authlen, "auth tag") : nil
 
-            if kdfname == 'bcrypt'
-              salt = kdfopts.read_string
-              rounds = kdfopts.read_long
+            encrypted_key = (kdfname == 'bcrypt')
+            if encrypted_key
+              salt = read_string_fully(kdfopts, "kdf salt")
+              rounds = read_long_fully(kdfopts, "kdf rounds")
 
               key = bcrypt_pbkdf_key(password, salt, keylen + ivlen, rounds)
             else
@@ -121,22 +131,26 @@ module Net
               auth_tag,
               key: key[0...keylen],
               iv: key[keylen...(keylen + ivlen)],
-              encrypted_key: kdfname == 'bcrypt'
+              encrypted_key: encrypted_key
             )
 
             decoded = Net::SSH::Buffer.new(decoded)
-            check1 = decoded.read_long
-            check2 = decoded.read_long
+            check1 = read_long_fully(decoded, "checkint", encrypted_key)
+            check2 = read_long_fully(decoded, "checkint", encrypted_key)
 
-            raise DecryptError.new("Decrypt failed on private key", encrypted_key: kdfname == 'bcrypt') if (check1 != check2)
+            raise DecryptError.new("Decrypt failed on private key", encrypted_key: encrypted_key) if (check1 != check2)
 
-            type_name = decoded.read_string
-            case type_name
-            when "ssh-ed25519"
-              PrivKey.new(decoded)
-            else
-              decoded.read_private_keyblob(type_name)
+            keys = Array.new(num_keys) do |index|
+              key = read_private_key(decoded, encrypted_key)
+              unless key.to_blob == public_keys[index]
+                raise DecryptError.new("Public key does not match private key", encrypted_key: encrypted_key)
+              end
+              key
             end
+
+            verify_padding!(decoded, encrypted_key)
+
+            keys
           end
 
           def self.bcrypt_pbkdf_key(password, salt, length, rounds)
@@ -151,6 +165,61 @@ module Net
 
             key
           end
+
+          def self.read_private_key(decoded, encrypted_key)
+            type_name = read_string_fully(decoded, "key type", encrypted_key)
+            case type_name
+            when "ssh-ed25519"
+              PrivKey.new(decoded)
+            else
+              key = decoded.read_private_keyblob(type_name)
+              comment = read_string_fully(decoded, "key comment", encrypted_key)
+              attach_comment(key, comment)
+            end
+          rescue ArgumentError => e
+            raise if e.is_a?(DecryptError)
+
+            raise DecryptError.new("Failed to parse private key", encrypted_key: encrypted_key)
+          end
+          private_class_method :read_private_key
+
+          def self.attach_comment(key, comment)
+            key.instance_variable_set(:@comment, comment)
+            key.define_singleton_method(:comment) { @comment }
+            key
+          end
+          private_class_method :attach_comment
+
+          def self.verify_padding!(decoded, encrypted_key)
+            padding = decoded.read(decoded.length - decoded.position) || ""
+            expected = (1..padding.bytesize).map { |i| i % 256 }.pack("C*")
+            unless padding == expected
+              raise DecryptError.new("Decrypt failed on private key", encrypted_key: encrypted_key)
+            end
+          end
+          private_class_method :verify_padding!
+
+          def self.read_string_fully(buffer, description, encrypted_key = nil)
+            length = read_long_fully(buffer, description, encrypted_key)
+            read_fully(buffer, length, description, encrypted_key)
+          end
+
+          def self.read_long_fully(buffer, description, encrypted_key = nil)
+            read_fully(buffer, 4, description, encrypted_key).unpack1("N")
+          end
+
+          def self.read_fully(buffer, count, description, encrypted_key = nil)
+            if buffer.length - buffer.position < count
+              message = "Truncated private key: missing #{description}"
+              if encrypted_key.nil?
+                raise ArgumentError, message
+              else
+                raise DecryptError.new(message, encrypted_key: encrypted_key)
+              end
+            end
+            buffer.read(count)
+          end
+          private_class_method :read_string_fully, :read_long_fully, :read_fully
 
           def self.require_bcrypt_pbkdf
             require 'bcrypt_pbkdf'
@@ -221,14 +290,16 @@ module Net
           CipherFactory = Net::SSH::Transport::CipherFactory
 
           attr_reader :sign_key
+          attr_reader :comment
 
           def initialize(buffer)
             pk = buffer.read_string
             sk = buffer.read_string
-            _comment = buffer.read_string
+            comment = buffer.read_string
 
             ED25519.validate_key_bytes!(pk, "public key", KEY_BYTES)
             ED25519.validate_key_bytes!(sk, "private key field", PRIVATE_KEY_BYTES)
+            raise ArgumentError, "Ed25519 private key is missing its comment" if comment.nil?
 
             private_key_bytes = sk[0, KEY_BYTES]
             raise ArgumentError, "Ed25519 private key does not include matching public key" unless sk[KEY_BYTES, KEY_BYTES] == pk
@@ -238,6 +309,7 @@ module Net
 
             @public_key_bytes = pk.dup.force_encoding('BINARY')
             @private_key_bytes = private_key_bytes.dup.force_encoding('BINARY')
+            @comment = comment
           end
 
           def to_blob

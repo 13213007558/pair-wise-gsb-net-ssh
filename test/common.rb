@@ -46,6 +46,102 @@ def P(*args)
   Net::SSH::Packet.new(Net::SSH::Buffer.from(*args))
 end
 
+# Builds an openssh-key-v1 private key container (PEM armored) holding the
+# given entries. Each entry is a hash with a :comment and either
+# :type => "ssh-ed25519" with :private_key (32 byte seed) and :public_key,
+# or :type => "ssh-rsa" with :key (an OpenSSL::PKey::RSA).
+# Supports the "none" cipher or bcrypt kdf with any supported cipher when
+# a password is given. Set :corrupt_padding to write invalid padding bytes
+# or :tamper_public_keys to make the outer public keys not match the
+# private key material.
+def build_openssh_key_container(entries, cipher: "none", password: nil, rounds: 16,
+                                corrupt_padding: false, tamper_public_keys: false)
+  check = rand(0xffffffff)
+  plain = Net::SSH::Buffer.from(:long, check, :long, check)
+  public_keys = entries.map { |entry| openssh_container_public_blob(entry) }
+  entries.each do |entry|
+    case entry[:type]
+    when "ssh-ed25519"
+      plain.write_mstring("ssh-ed25519".dup)
+      plain.write_string(entry[:public_key])
+      plain.write_string(entry[:private_key] + entry[:public_key])
+    when "ssh-rsa"
+      key = entry[:key]
+      plain.write_mstring("ssh-rsa".dup)
+      plain.write_bignum(key.n)
+      plain.write_bignum(key.e)
+      plain.write_bignum(key.d)
+      plain.write_bignum(key.q.mod_inverse(key.p))
+      plain.write_bignum(key.p)
+      plain.write_bignum(key.q)
+    else
+      raise "unsupported test key type: #{entry[:type]}"
+    end
+    plain.write_string(entry[:comment])
+  end
+
+  if cipher == "none"
+    kdfname = "none"
+    kdfopts = ""
+    _keylen, blocksize, = Net::SSH::Transport::CipherFactory.get_lengths(cipher, iv_len: true)
+    blocksize = 8 if blocksize.zero?
+  else
+    require 'bcrypt_pbkdf'
+    kdfname = "bcrypt"
+    salt = Random.bytes(16)
+    kdfopts = Net::SSH::Buffer.from(:string, salt, :long, rounds).to_s
+    keylen, blocksize, ivlen = Net::SSH::Transport::CipherFactory.get_lengths(cipher, iv_len: true)
+    key = BCryptPbkdf.key(password, salt, keylen + ivlen, rounds)
+  end
+
+  padlen = blocksize - (plain.length % blocksize)
+  padlen += blocksize if padlen.zero?
+  padding = (1..padlen).map { |i| i % 256 }
+  padding[-1] = (padding.last + 1) % 256 if corrupt_padding
+  plain.write(padding.pack("C*"))
+
+  if cipher == "none"
+    encrypted = plain.to_s
+  else
+    encryptor = Net::SSH::Transport::CipherFactory.get(
+      cipher, key: key[0...keylen], iv: key[keylen...(keylen + ivlen)], encrypt: true
+    )
+    encrypted = encryptor.update(plain.to_s) + encryptor.final
+  end
+
+  public_keys = public_keys.map { "tampered".b } if tamper_public_keys
+
+  blob = Net::SSH::Buffer.new
+  blob.write("openssh-key-v1\0")
+  blob.write_mstring(cipher.dup)
+  blob.write_mstring(kdfname.dup)
+  blob.write_string(kdfopts)
+  blob.write_long(public_keys.size)
+  public_keys.each { |public_key| blob.write_string(public_key) }
+  blob.write_string(encrypted)
+
+  "-----BEGIN OPENSSH PRIVATE KEY-----\n" +
+    [blob.to_s].pack("m0").scan(/.{1,70}/).join("\n") +
+    "\n-----END OPENSSH PRIVATE KEY-----\n"
+end
+
+def openssh_container_public_blob(entry)
+  case entry[:type]
+  when "ssh-ed25519"
+    Net::SSH::Buffer.from(:mstring, "ssh-ed25519".dup, :string, entry[:public_key]).to_s
+  when "ssh-rsa"
+    Net::SSH::Buffer.from(:mstring, "ssh-rsa".dup, :bignum, entry[:key].e, :bignum, entry[:key].n).to_s
+  else
+    raise "unsupported test key type: #{entry[:type]}"
+  end
+end
+
+def ed25519_container_entry(comment)
+  seed = Random.bytes(Net::SSH::Authentication::ED25519::KEY_BYTES)
+  public_key = Net::SSH::Authentication::ED25519.new_private_key(seed).raw_public_key
+  { type: "ssh-ed25519", private_key: seed, public_key: public_key, comment: comment }
+end
+
 # DH key generate with OpenSSL::PKey::DH.new(512).to_pem
 def dh_512bits_bn
   OpenSSL::PKey::DH.new(

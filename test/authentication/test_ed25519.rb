@@ -96,6 +96,113 @@ module Authentication
       Net::SSH::Authentication::ED25519::PrivKey.read(private_key_no_pwd, nil)
     end
 
+    def test_read_all_returns_every_key_with_its_comment
+      entries = [
+        ed25519_container_entry("first-key"),
+        ed25519_container_entry("second-key"),
+        ed25519_container_entry("third-key")
+      ]
+      data = build_openssh_key_container(entries)
+
+      keys = Net::SSH::Authentication::ED25519::OpenSSHPrivateKeyLoader.read_all(data, nil)
+
+      assert_equal 3, keys.size
+      assert_equal %w[first-key second-key third-key], keys.map(&:comment)
+      entries.each_with_index do |entry, i|
+        assert_equal entry[:private_key], keys[i].private_key_bytes
+        assert_equal entry[:public_key], keys[i].public_key_bytes
+      end
+    end
+
+    def test_read_returns_first_key_of_multi_key_container
+      entries = [ed25519_container_entry("first-key"), ed25519_container_entry("second-key")]
+      data = build_openssh_key_container(entries)
+
+      key = Net::SSH::Authentication::ED25519::OpenSSHPrivateKeyLoader.read(data, nil)
+
+      assert_equal "first-key", key.comment
+      assert_equal entries[0][:private_key], key.private_key_bytes
+    end
+
+    def test_read_all_with_mixed_key_types
+      rsa = OpenSSL::PKey::RSA.generate(2048)
+      entries = [
+        ed25519_container_entry("ed25519-key"),
+        { type: "ssh-rsa", key: rsa, comment: "rsa-key" }
+      ]
+      data = build_openssh_key_container(entries)
+
+      keys = Net::SSH::Authentication::ED25519::OpenSSHPrivateKeyLoader.read_all(data, nil)
+
+      assert_equal 2, keys.size
+      assert_equal "ed25519-key", keys[0].comment
+      assert_equal "rsa-key", keys[1].comment
+      assert keys[1].private?
+      assert_equal rsa.n, keys[1].n
+      assert_equal rsa.d, keys[1].d
+    end
+
+    def test_read_all_encrypted_multi_key_container
+      entries = [ed25519_container_entry("first-key"), ed25519_container_entry("second-key")]
+      data = build_openssh_key_container(entries, cipher: "aes256-cbc", password: "secret")
+
+      keys = Net::SSH::Authentication::ED25519::OpenSSHPrivateKeyLoader.read_all(data, "secret")
+
+      assert_equal 2, keys.size
+      assert_equal %w[first-key second-key], keys.map(&:comment)
+      assert_equal entries[1][:private_key], keys[1].private_key_bytes
+    end
+
+    def test_read_all_with_wrong_password_raises_decrypt_error_without_leaking_secrets
+      entries = [ed25519_container_entry("super-secret-comment")]
+      data = build_openssh_key_container(entries, cipher: "aes256-cbc", password: "correct-horse")
+
+      error = assert_raises(Net::SSH::Authentication::ED25519::OpenSSHPrivateKeyLoader::DecryptError) do
+        Net::SSH::Authentication::ED25519::OpenSSHPrivateKeyLoader.read_all(data, "wrong-password")
+      end
+
+      assert error.encrypted_key?
+      refute_includes error.message, "wrong-password"
+      refute_includes error.message, "correct-horse"
+      refute_includes error.message, "super-secret-comment"
+    end
+
+    def test_read_all_with_truncated_container_raises
+      data = build_openssh_key_container([ed25519_container_entry("key")])
+      lines = data.lines
+      truncated = (lines[0...2] + [lines.last]).join
+
+      error = assert_raises(ArgumentError) do
+        Net::SSH::Authentication::ED25519::OpenSSHPrivateKeyLoader.read_all(truncated, nil)
+      end
+      assert_match(/truncated/i, error.message)
+    end
+
+    def test_read_all_with_corrupt_padding_raises
+      data = build_openssh_key_container([ed25519_container_entry("key")], corrupt_padding: true)
+
+      assert_raises(Net::SSH::Authentication::ED25519::OpenSSHPrivateKeyLoader::DecryptError) do
+        Net::SSH::Authentication::ED25519::OpenSSHPrivateKeyLoader.read_all(data, nil)
+      end
+    end
+
+    def test_read_all_with_mismatched_outer_public_key_raises
+      data = build_openssh_key_container([ed25519_container_entry("key")], tamper_public_keys: true)
+
+      error = assert_raises(Net::SSH::Authentication::ED25519::OpenSSHPrivateKeyLoader::DecryptError) do
+        Net::SSH::Authentication::ED25519::OpenSSHPrivateKeyLoader.read_all(data, nil)
+      end
+      refute error.encrypted_key?
+    end
+
+    def test_read_all_with_no_keys_raises
+      data = build_openssh_key_container([])
+
+      assert_raises(ArgumentError) do
+        Net::SSH::Authentication::ED25519::OpenSSHPrivateKeyLoader.read_all(data, nil)
+      end
+    end
+
     def test_pwd_key_without_bcrypt_pbkdf_raises_targeted_decrypt_error
       Net::SSH::Authentication::ED25519::OpenSSHPrivateKeyLoader.expects(:require_bcrypt_pbkdf)
                                                                 .raises(LoadError)

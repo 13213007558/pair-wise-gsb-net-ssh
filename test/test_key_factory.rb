@@ -90,6 +90,53 @@ class TestKeyFactory < NetSSHTest
     assert_equal rsa_key.to_blob, Net::SSH::KeyFactory.load_public_key(@key_file).to_blob
   end
 
+  def test_load_private_keys_returns_all_keys_from_openssh_container
+    skip "OpenSSH private key loader requires Ed25519 support" unless Net::SSH::Authentication::ED25519Loader::LOADED
+    entries = [ed25519_container_entry("one"), ed25519_container_entry("two")]
+    File.expects(:read).with(@key_file).returns(build_openssh_key_container(entries))
+    keys = Net::SSH::KeyFactory.load_private_keys(@key_file)
+    assert_equal 2, keys.size
+    assert_equal %w[one two], keys.map(&:comment)
+  end
+
+  def test_load_private_key_returns_first_key_from_openssh_container
+    skip "OpenSSH private key loader requires Ed25519 support" unless Net::SSH::Authentication::ED25519Loader::LOADED
+    entries = [ed25519_container_entry("one"), ed25519_container_entry("two")]
+    File.expects(:read).with(@key_file).returns(build_openssh_key_container(entries))
+    key = Net::SSH::KeyFactory.load_private_key(@key_file)
+    assert_equal "one", key.comment
+    assert_equal entries[0][:private_key], key.private_key_bytes
+  end
+
+  def test_load_data_private_keys_with_pem_returns_single_element_array
+    keys = Net::SSH::KeyFactory.load_data_private_keys(rsa_key.export)
+    assert_equal 1, keys.size
+    assert_equal rsa_key.to_der, keys.first.to_der
+  end
+
+  def test_load_encrypted_openssh_container_should_prompt_once_and_return_all_keys
+    skip "OpenSSH private key loader requires Ed25519 support" unless Net::SSH::Authentication::ED25519Loader::LOADED
+    prompt = MockPrompt.new
+    entries = [ed25519_container_entry("one"), ed25519_container_entry("two")]
+    File.expects(:read).with(@key_file).returns(build_openssh_key_container(entries, cipher: "aes256-cbc", password: "password"))
+    prompt.expects(:_ask).once.returns("password")
+    keys = Net::SSH::KeyFactory.load_private_keys(@key_file, nil, true, prompt)
+    assert_equal %w[one two], keys.map(&:comment)
+  end
+
+  def test_load_encrypted_openssh_container_should_give_three_tries_for_the_password_and_then_raise
+    skip "OpenSSH private key loader requires Ed25519 support" unless Net::SSH::Authentication::ED25519Loader::LOADED
+    prompt = MockPrompt.new
+    entries = [ed25519_container_entry("super-secret-comment")]
+    File.expects(:read).with(@key_file).returns(build_openssh_key_container(entries, cipher: "aes256-cbc", password: "password"))
+    prompt.expects(:_ask).times(3).returns("passwod", "passphrase", "passwd")
+    error = assert_raises(Net::SSH::Authentication::ED25519::OpenSSHPrivateKeyLoader::DecryptError) do
+      Net::SSH::KeyFactory.load_private_key(@key_file, nil, true, prompt)
+    end
+    refute_includes error.message, "passwod"
+    refute_includes error.message, "super-secret-comment"
+  end
+
   def test_load_public_rsa_key_with_comment_should_return_key
     File.expects(:read).with(@key_file).returns(public(rsa_key) + " key_comment")
     assert_equal rsa_key.to_blob, Net::SSH::KeyFactory.load_public_key(@key_file).to_blob

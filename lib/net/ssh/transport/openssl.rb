@@ -182,6 +182,44 @@ module OpenSSL
         end
       end
 
+      # Reads an ecdsa private key (as stored in an openssh-key-v1 private
+      # key container) from the buffer: the curve name, the public key
+      # octets and the private scalar. Returns a fully functional
+      # OpenSSL::PKey::EC private key.
+      def self.read_private_keyblob(curve_name_in_type, buffer)
+        curve_name_in_key = buffer.read_string
+        raise ArgumentError, "truncated ecdsa private key" if curve_name_in_key.nil?
+
+        unless curve_name_in_type == curve_name_in_key
+          raise Net::SSH::Exception, "curve name mismatched (`#{curve_name_in_key}' with `#{curve_name_in_type}')"
+        end
+
+        public_key_oct = buffer.read_string
+        private_key = buffer.read_bignum
+        raise ArgumentError, "truncated ecdsa private key" if public_key_oct.nil? || private_key.nil?
+
+        curvename = OpenSSL::PKey::EC::CurveNameAlias[curve_name_in_key]
+        group = OpenSSL::PKey::EC::Group.new(curvename)
+        point = OpenSSL::PKey::EC::Point.new(group, OpenSSL::BN.new(public_key_oct, 2))
+
+        unless group.generator.mul(private_key) == point
+          raise ArgumentError, "ecdsa private key does not match public key"
+        end
+
+        private_key_octets = private_key.to_s(2).rjust((group.degree + 7) / 8, "\0")
+        asn1 = OpenSSL::ASN1::Sequence(
+          [
+            OpenSSL::ASN1::Integer(1),
+            OpenSSL::ASN1::OctetString(private_key_octets),
+            OpenSSL::ASN1::ASN1Data.new([OpenSSL::ASN1::ObjectId(curvename)], 0, :CONTEXT_SPECIFIC),
+            OpenSSL::ASN1::ASN1Data.new([OpenSSL::ASN1::BitString(point.to_octet_string(:uncompressed))], 1, :CONTEXT_SPECIFIC)
+          ]
+        )
+        OpenSSL::PKey::EC.new(asn1.to_der)
+      rescue OpenSSL::PKey::ECError
+        raise NotImplementedError, "unsupported key type `#{curve_name_in_key}'"
+      end
+
       # Returns the description of this key type used by the
       # SSH2 protocol, like "ecdsa-sha2-nistp256"
       def ssh_type

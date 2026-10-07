@@ -41,12 +41,31 @@ module Net
           load_data_private_key(data, passphrase, ask_passphrase, filename, prompt)
         end
 
+        # Loads all private keys from a file. Files in the openssh-key-v1
+        # format may contain more than one key; other formats yield a
+        # single-element array. If a key is encrypted (requiring a passphrase
+        # to use), the user will be prompted to enter their password unless
+        # passphrase works.
+        def load_private_keys(filename, passphrase = nil, ask_passphrase = true, prompt = Prompt.default)
+          data = File.read(File.expand_path(filename))
+          load_data_private_keys(data, passphrase, ask_passphrase, filename, prompt)
+        end
+
         # Loads a private key. It will correctly determine
         # whether the file describes an RSA or DSA key, and will load it
         # appropriately. The new key is returned. If the key itself is
         # encrypted (requiring a passphrase to use), the user will be
         # prompted to enter their password unless passphrase works.
         def load_data_private_key(data, passphrase = nil, ask_passphrase = true, filename = "", prompt = Prompt.default)
+          load_data_private_keys(data, passphrase, ask_passphrase, filename, prompt).first
+        end
+
+        # Loads every private key contained in the given data and returns
+        # them as an array. Data in the openssh-key-v1 format may contain
+        # more than one key; other formats yield a single-element array.
+        # If a key is encrypted (requiring a passphrase to use), the user
+        # will be prompted to enter their password unless passphrase works.
+        def load_data_private_keys(data, passphrase = nil, ask_passphrase = true, filename = "", prompt = Prompt.default)
           key_type = classify_key(data, filename)
 
           encrypted_key = nil
@@ -55,7 +74,7 @@ module Net
           prompter = nil
           result =
             begin
-              key_type.read(data, passphrase || 'invalid')
+              key_type.read_all(data, passphrase || 'invalid')
             rescue *key_type.error_classes => e
               encrypted_key = !!key_type.encrypted_key?(data, e) if encrypted_key.nil?
               if encrypted_key && ask_passphrase
@@ -110,6 +129,10 @@ module Net
             raise Exception, "TODO subclasses should implement read"
           end
 
+          def self.read_all(key_data, passphrase)
+            [read(key_data, passphrase)]
+          end
+
           def self.error_classes
             raise Exception, "TODO subclasses should implement read"
           end
@@ -122,6 +145,10 @@ module Net
         class OpenSSHPrivateKeyType < KeyType
           def self.read(key_data, passphrase)
             Net::SSH::Authentication::ED25519::OpenSSHPrivateKeyLoader.read(key_data, passphrase)
+          end
+
+          def self.read_all(key_data, passphrase)
+            Net::SSH::Authentication::ED25519::OpenSSHPrivateKeyLoader.read_all(key_data, passphrase)
           end
 
           def self.error_classes
