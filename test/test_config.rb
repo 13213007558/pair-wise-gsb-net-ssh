@@ -69,6 +69,17 @@ class TestConfig < NetSSHTest
     end
   end
 
+  def test_revoked_host_keys
+    data = '
+      Host *
+        RevokedHostKeys ~/.ssh/revoked.krl
+    '
+    with_config_from_data data do |f|
+      config = Net::SSH::Config.for("foo", [f])
+      assert_equal "~/.ssh/revoked.krl", config[:revoked_host_keys_file]
+    end
+  end
+
   def test_load_with_regex_chars
     data = '
       Host |

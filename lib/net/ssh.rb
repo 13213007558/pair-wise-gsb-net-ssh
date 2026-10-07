@@ -4,6 +4,7 @@ require 'shellwords'
 
 require 'net/ssh/config'
 require 'net/ssh/errors'
+require 'net/ssh/krl'
 require 'net/ssh/loggable'
 require 'net/ssh/transport/session'
 require 'net/ssh/authentication/session'
@@ -64,7 +65,7 @@ module Net
       keepalive keepalive_interval keepalive_maxcount kex keys key_data
       keycerts keycert_data languages logger paranoid password port proxy
       rekey_blocks_limit rekey_limit rekey_packet_limit timeout verbose
-      known_hosts global_known_hosts_file user_known_hosts_file host_key_alias
+      known_hosts global_known_hosts_file user_known_hosts_file revoked_host_keys_file host_key_alias
       host_name user properties passphrase keys_only max_pkt_size
       max_win_size send_env set_env use_agent number_of_password_prompts
       append_all_supported_algorithms non_interactive password_prompt
@@ -188,6 +189,8 @@ module Net
     # * :user_known_hosts_file => the location of the user known hosts file.
     #   Set to an array to specify multiple user known hosts files.
     #   Defaults to %w(~/.ssh/known_hosts ~/.ssh/known_hosts2).
+    # * :revoked_host_keys_file => a local OpenSSH KRL file (or array of files)
+    #   checked before a presented host key or certificate is accepted.
     # * :use_agent => Set false to disable the use of ssh-agent. Defaults to
     #   true
     # * :identity_agent => the path to the ssh-agent's UNIX socket

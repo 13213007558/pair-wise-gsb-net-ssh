@@ -1,5 +1,6 @@
 require 'net/ssh/errors'
 require 'net/ssh/known_hosts'
+require 'net/ssh/krl'
 
 module Net
   module SSH
@@ -14,6 +15,8 @@ module Net
       # Otherwise, this returns true.
       class Always
         def verify(arguments)
+          verify_not_revoked!(arguments)
+
           host_keys = arguments[:session].host_keys
 
           # We've never seen this host before, so raise an exception.
@@ -46,6 +49,17 @@ module Net
         end
 
         private
+
+        def verify_not_revoked!(args)
+          session = args[:session]
+          sources = session.respond_to?(:options) ? session.options[:revoked_host_keys_file] : nil
+          revocation = KRL.revoked?(sources, args[:key])
+          return unless revocation
+
+          exception = HostKeyRevoked.new("fingerprint #{args[:fingerprint]} is revoked (#{revocation})")
+          exception.data = args
+          raise exception
+        end
 
         # Enforces the @cert-authority certificate constraints for entries that
         # implement them (Net::SSH::HostKeyEntries::CertAuthority). Non-certificate

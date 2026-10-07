@@ -33,6 +33,7 @@ module Net
     # * ProxyJump => maps to the :proxy option
     # * PubKeyAuthentication => maps to the :auth_methods option
     # * RekeyLimit => :rekey_limit
+    # * RevokedHostKeys => :revoked_host_keys_file
     # * StrictHostKeyChecking => :verify_host_key
     # * User => :user
     # * UserKnownHostsFile => :user_known_hosts_file
@@ -228,6 +229,7 @@ module Net
           identityfile: :keys,
           fingerprinthash: :fingerprint_hash,
           port: :port,
+          revokedhostkeys: :revoked_host_keys_file,
           user: :user,
           checkhostip: :check_host_ip
         }.freeze
