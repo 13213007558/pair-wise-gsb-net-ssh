@@ -54,6 +54,9 @@ module Net
           @known_identities = {}
           @agent = nil
           @options = options
+          @allow_unbound_agent = options.fetch(:allow_unbound_agent, true)
+          @agent_session_binding = options[:agent_session_binding]
+          @agent_session_bound = false
         end
 
         # Clear all knowledge of any loaded user keys. This also clears the list
@@ -108,6 +111,7 @@ module Net
         def finish
           @agent.close if @agent
           @agent = nil
+          @agent_session_bound = false
         end
 
         # Iterates over all available identities (public keys) known to this
@@ -124,7 +128,7 @@ module Net
 
           user_identities = load_identities(prepared_identities, false, true)
 
-          if agent
+          if bind_agent!
             agent.identities.each do |key|
               corresponding_user_identity = user_identities.detect { |identity|
                 identity[:public_key] && identity[:public_key].to_pem == key.to_pem
@@ -238,6 +242,26 @@ module Net
         rescue AgentNotAvailable
           @use_agent = false
           nil
+        end
+
+        def bind_agent!
+          return false unless agent
+          return true if @agent_session_bound
+
+          return true unless @agent_session_binding
+
+          agent.bind_session(@agent_session_binding[:host_key],
+                             @agent_session_binding[:session_id],
+                             @agent_session_binding[:host_signature],
+                             false)
+          @agent_session_bound = true
+          true
+        rescue AgentExtensionUnsupported
+          raise unless @allow_unbound_agent
+
+          debug { "agent does not support session binding; continuing without an agent binding" }
+          @agent_session_bound = true
+          true
         end
 
         def no_keys?

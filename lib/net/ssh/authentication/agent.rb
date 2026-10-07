@@ -17,6 +17,12 @@ module Net
       # An exception for indicating that the SSH agent is not available.
       class AgentNotAvailable < AgentError; end
 
+      # An extension request was not understood by the agent.
+      class AgentExtensionUnsupported < AgentError; end
+
+      # The agent understood an extension request, but refused it.
+      class AgentExtensionFailed < AgentError; end
+
       # This class implements a simple client for the ssh-agent protocol. It
       # does not implement any specific protocol, but instead copies the
       # behavior of the ssh-agent functions in the OpenSSH library (3.8).
@@ -43,6 +49,8 @@ module Net
         SSH2_AGENT_LOCK                  = 22
         SSH2_AGENT_UNLOCK                = 23
         SSH2_AGENT_ADD_ID_CONSTRAINED    = 25
+        SSH_AGENTC_EXTENSION             = 27
+        SSH_AGENT_EXTENSION_FAILURE      = 28
         SSH2_AGENT_FAILURE               = 30
         SSH2_AGENT_VERSION_RESPONSE      = 103
 
@@ -53,6 +61,8 @@ module Net
         SSH_AGENT_RSA_IDENTITIES_ANSWER2 = 5
         SSH_AGENT_FAILURE                = 5
         SSH_AGENT_SUCCESS                = 6
+
+        SESSION_BIND_EXTENSION = "session-bind@openssh.com".freeze
 
         SSH_AGENT_CONSTRAIN_LIFETIME = 1
         SSH_AGENT_CONSTRAIN_CONFIRM  = 2
@@ -162,6 +172,28 @@ module Net
           return reply.read_string
         end
 
+        # Bind this agent connection to the host key and session identifier
+        # from the initial key exchange. The signature is the complete SSH
+        # signature blob sent by the server in that exchange.
+        def bind_session(host_key, session_id, host_signature, forwarding = false)
+          request = Buffer.from(:string, Buffer.from(:key, host_key),
+                                :string, session_id,
+                                :string, host_signature,
+                                :bool, forwarding)
+          type, = send_and_wait(SSH_AGENTC_EXTENSION, :string, SESSION_BIND_EXTENSION, :raw, request.to_s)
+
+          case type
+          when SSH_AGENT_SUCCESS
+            true
+          when SSH_AGENT_FAILURE, SSH2_AGENT_FAILURE, SSH_COM_AGENT2_FAILURE
+            raise AgentExtensionUnsupported, "agent does not support #{SESSION_BIND_EXTENSION}"
+          when SSH_AGENT_EXTENSION_FAILURE
+            raise AgentExtensionFailed, "agent rejected #{SESSION_BIND_EXTENSION}"
+          else
+            raise AgentError, "unexpected #{SESSION_BIND_EXTENSION} response #{type}"
+          end
+        end
+
         # Adds the private key with comment to the agent.
         # If lifetime is given, the key will automatically be removed after lifetime
         # seconds.
@@ -207,6 +239,20 @@ module Net
 
         private
 
+        def fill_read_buffer(length)
+          @read_buffer ||= Net::SSH::Buffer.new
+          while @read_buffer.content.length < length
+            available = length - @read_buffer.content.length
+            if @socket.is_a?(::IO)
+              next unless IO.select([@socket], nil, nil, 1)
+
+              @read_buffer.append(@socket.readpartial([65_536, available].min))
+            else
+              @read_buffer.append(@socket.read(available))
+            end
+          end
+        end
+
         def unix_socket_class
           defined?(UNIXSocket) && UNIXSocket
         end
@@ -223,8 +269,16 @@ module Net
         # tuple consisting of the packet type, and the packet's body (which
         # is returned as a Net::SSH::Buffer).
         def read_packet
-          buffer = Net::SSH::Buffer.new(@socket.read(4))
-          buffer.append(@socket.read(buffer.read_long))
+          fill_read_buffer(4)
+          length = Net::SSH::Buffer.new(@read_buffer.content.byteslice(0, 4)).read_long
+          total_length = length + 4
+          fill_read_buffer(total_length)
+
+          content = @read_buffer.content
+          packet_content = content.byteslice(0, total_length)
+          remaining_content = content.length > total_length ? content.byteslice(total_length..) : nil
+          @read_buffer = remaining_content ? Net::SSH::Buffer.new(remaining_content) : Net::SSH::Buffer.new
+          buffer = Net::SSH::Buffer.new(packet_content.byteslice(4..))
           type = buffer.read_byte
           debug { "received agent packet #{type} len #{buffer.length - 4}" }
           return type, buffer

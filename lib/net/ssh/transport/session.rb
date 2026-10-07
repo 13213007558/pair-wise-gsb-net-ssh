@@ -169,6 +169,18 @@ module Net
           @peer ||= { ip: socket.peer_ip, port: @port.to_i, host: @host, canonized: host_as_string }
         end
 
+        # Returns the host proof from the initial key exchange. Unlike the
+        # current exchange hash, these values remain unchanged after rekey.
+        def session_binding
+          return unless algorithms.session_id && algorithms.initial_host_key
+
+          {
+            host_key: algorithms.initial_host_key,
+            session_id: algorithms.session_id,
+            host_signature: algorithms.initial_host_signature
+          }
+        end
+
         # Blocks until a new packet is available to be read, and returns that
         # packet. See #poll_message.
         def next_message

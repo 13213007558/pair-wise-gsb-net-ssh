@@ -1,4 +1,5 @@
 require 'net/ssh/loggable'
+require 'net/ssh/authentication/agent'
 
 module Net
   module SSH
@@ -409,7 +410,7 @@ module Net
           channel[:invisible] = true
 
           begin
-            agent = Authentication::Agent.connect(logger, session.options[:agent_socket_factory])
+            agent = connect_agent(session)
             if (agent.socket.is_a? ::IO)
               prepare_client(agent.socket, channel, :agent)
             else
@@ -418,6 +419,30 @@ module Net
           rescue Exception => e
             error { "attempted to connect to agent but failed: #{e.class.name} (#{e.message})" }
             raise Net::SSH::ChannelOpenFailed.new(2, "could not connect to authentication agent")
+          end
+        end
+
+        def connect_agent(session)
+          agent = Authentication::Agent.connect(logger,
+                                                session.options[:agent_socket_factory],
+                                                session.options[:identity_agent])
+          bind_agent_to_session(agent, session)
+          agent
+        end
+
+        def bind_agent_to_session(agent, session)
+          binding = session.transport.session_binding
+          return unless binding
+
+          begin
+            agent.bind_session(binding[:host_key],
+                              binding[:session_id],
+                              binding[:host_signature],
+                              true)
+          rescue Authentication::AgentExtensionUnsupported
+            raise unless session.options.fetch(:allow_unbound_agent, true)
+
+            debug { "forwarded agent does not support session binding; forwarding without a binding" }
           end
         end
       end

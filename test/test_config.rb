@@ -122,6 +122,7 @@ class TestConfig < NetSSHTest
 
   def test_translate_should_correctly_translate_from_openssh_to_net_ssh_names
     open_ssh = {
+      'allowunboundagent' => false,
       'bindaddress' => "127.0.0.1",
       'ciphers' => "a,b,c",
       'compression' => true,
@@ -153,6 +154,7 @@ class TestConfig < NetSSHTest
     assert_equal true,      net_ssh[:compression]
     assert_equal 6,         net_ssh[:compression_level]
     assert_equal 100,       net_ssh[:timeout]
+    assert_equal false,     net_ssh[:allow_unbound_agent]
     assert_equal true,      net_ssh[:forward_agent]
     assert_equal %w(hostbased keyboard-interactive none password publickey), net_ssh[:auth_methods].sort
     assert_equal %w(d e f), net_ssh[:host_key]

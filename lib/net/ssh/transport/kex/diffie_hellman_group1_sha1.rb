@@ -104,13 +104,15 @@ module Net
             result[:server_dh_pubkey] = buffer.read_bignum
             result[:shared_secret] = OpenSSL::BN.new(dh.compute_key(result[:server_dh_pubkey]), 2)
 
-            sig_buffer = Net::SSH::Buffer.new(buffer.read_string)
+            signature_blob = buffer.read_string
+            sig_buffer = Net::SSH::Buffer.new(signature_blob)
             sig_type = sig_buffer.read_string
             if sig_type != algorithms.host_key_format
               raise Net::SSH::Exception,
                     "host key algorithm mismatch for signature " +
                     "'#{sig_type}' != '#{algorithms.host_key_format}'"
             end
+            result[:server_signature_blob] = signature_blob
             result[:server_sig] = sig_buffer.read_string
 
             return result

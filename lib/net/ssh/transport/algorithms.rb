@@ -146,6 +146,12 @@ module Net
         # The session-id for this session, as decided during the initial key exchange.
         attr_reader :session_id
 
+        # The host key used for the initial key exchange.
+        attr_reader :initial_host_key
+
+        # The server signature from the initial key exchange.
+        attr_reader :initial_host_signature
+
         # Returns true if the given packet can be processed during a key-exchange.
         def self.allowed_packet?(packet)
           (1..4).include?(packet.type) ||
@@ -461,7 +467,11 @@ module Net
           hash     = result[:session_id]
           digester = result[:hashing_algorithm]
 
-          @session_id ||= hash
+          unless @session_id
+            @session_id = hash
+            @initial_host_key = result[:server_key]
+            @initial_host_signature = result[:server_signature]
+          end
 
           key = Proc.new { |salt| digester.digest(secret + hash + salt + @session_id) }
 

@@ -69,7 +69,7 @@ module Net
       max_win_size send_env set_env use_agent number_of_password_prompts
       append_all_supported_algorithms non_interactive password_prompt
       agent_socket_factory minimum_dh_bits verify_host_key
-      fingerprint_hash check_host_ip pubkey_algorithms
+      fingerprint_hash check_host_ip pubkey_algorithms allow_unbound_agent
     ]
 
     # The standard means of starting a new SSH connection. When used with a
@@ -205,6 +205,9 @@ module Net
     # * :agent_socket_factory => enables the user to pass a lambda/block that will serve as the socket factory
     #    Net::SSH.start(host,user,agent_socket_factory: ->{ UNIXSocket.open('/foo/bar') })
     #    example: ->{ UNIXSocket.open('/foo/bar')}
+    # * :allow_unbound_agent => when false, an agent that does not support
+    #   session-bind@openssh.com is not used. An agent that supports the
+    #   extension but explicitly rejects a binding is always an error.
     # * :verify_host_key => specify how strict host-key verification should be.
     #   In order of increasing strictness:
     #   * :never (very insecure) ::Net::SSH::Verifiers::Never

@@ -15,6 +15,7 @@ module Net
     # * Compression => :compression
     # * CompressionLevel => :compression_level
     # * ConnectTimeout => maps to the :timeout option
+    # * AllowUnboundAgent => :allow_unbound_agent
     # * ForwardAgent => :forward_agent
     # * GlobalKnownHostsFile => :global_known_hosts_file
     # * HostBasedAuthentication => maps to the :auth_methods option
@@ -215,6 +216,7 @@ module Net
         end
 
         TRANSLATE_CONFIG_KEY_RENAME_MAP = {
+          allowunboundagent: :allow_unbound_agent,
           bindaddress: :bind_address,
           compression: :compression,
           compressionlevel: :compression_level,

@@ -193,6 +193,20 @@ module Transport
       assert_equal({ ip: "1.2.3.4", port: TEST_PORT, host: TEST_HOST, canonized: "net.ssh.test,1.2.3.4" }, session.peer)
     end
 
+    def test_session_binding_returns_initial_key_exchange_proof
+      session!
+      host_key = OpenSSL::PKey::RSA.new(512).public_key
+      algorithms.stubs(session_id: "session id",
+                       initial_host_key: host_key,
+                       initial_host_signature: "host signature")
+
+      assert_equal({
+        host_key: host_key,
+        session_id: "session id",
+        host_signature: "host signature"
+      }, session.session_binding)
+    end
+
     def test_next_message_should_block_until_next_message_is_available
       session.expects(:poll_message).with(:block)
       session.next_message

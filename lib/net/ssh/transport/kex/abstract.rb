@@ -53,6 +53,7 @@ module Net
             {
               session_id: session_id,
               server_key: result[:server_key],
+              server_signature: result[:server_signature_blob],
               shared_secret: result[:shared_secret],
               hashing_algorithm: digester
             }
