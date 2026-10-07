@@ -11,6 +11,14 @@ class TestKeyFactory < NetSSHTest
     assert_equal rsa_key.to_der, Net::SSH::KeyFactory.load_private_key(@key_file).to_der
   end
 
+  def test_load_private_keys_returns_one_traditional_key
+    File.expects(:read).with(@key_file).returns(rsa_key.export)
+    keys = Net::SSH::KeyFactory.load_private_keys(@key_file)
+
+    assert_equal 1, keys.length
+    assert_equal rsa_key.to_der, keys.first.to_der
+  end
+
   def test_load_unencrypted_private_RSA_key_should_have_fp_md5
     File.expects(:read).with(@key_file).returns(rsa_key.export)
     assert_equal rsa_key_fingerprint_md5, Net::SSH::KeyFactory.load_private_key(@key_file).fingerprint

@@ -71,72 +71,264 @@ module Net
           end
 
           def self.read(datafull, password)
-            datafull = datafull.strip
-            raise ArgumentError.new("Expected #{MBEGIN} at start of private key") unless datafull.start_with?(MBEGIN)
-            raise ArgumentError.new("Expected #{MEND} at end of private key") unless datafull.end_with?(MEND)
+            read_all(datafull, password).fetch(0)
+          end
 
-            datab64 = datafull[MBEGIN.size...-MEND.size]
-            data = datab64.unpack1("m")
-            raise ArgumentError.new("Expected #{MAGIC} at start of decoded private key") unless data.start_with?(MAGIC)
-
-            buffer = Net::SSH::Buffer.new(data[(MAGIC.size + 1)..-1])
-
-            ciphername = buffer.read_string
-            raise ArgumentError.new("#{ciphername} in private key is not supported") unless
-              CipherFactory.supported?(ciphername)
-
-            kdfname = buffer.read_string
-            raise ArgumentError.new("Expected #{kdfname} to be or none or bcrypt") unless %w[none bcrypt].include?(kdfname)
-
-            kdfopts = Net::SSH::Buffer.new(buffer.read_string)
-            num_keys = buffer.read_long
-            raise ArgumentError.new("Only 1 key is supported in ssh keys #{num_keys} was in private key") unless num_keys == 1
-
-            _pubkey = buffer.read_string
-
-            len = buffer.read_long
-            encrypted_private = buffer.read(len)
-
-            keylen, blocksize, ivlen = CipherFactory.get_lengths(ciphername, iv_len: true)
-            raise ArgumentError.new("Private key len:#{len} is not a multiple of #{blocksize}") if
-              (len < blocksize) || ((blocksize > 0) && (len % blocksize) != 0)
-
-            raise ArgumentError.new("Private key len:#{len} exceeds available data") unless encrypted_private.bytesize == len
-
-            authlen = CipherFactory.auth_length(ciphername)
-            auth_tag = authlen > 0 ? buffer.read(authlen) : nil
-
-            if kdfname == 'bcrypt'
-              salt = kdfopts.read_string
-              rounds = kdfopts.read_long
-
-              key = bcrypt_pbkdf_key(password, salt, keylen + ivlen, rounds)
-            else
-              key = "\x00" * (keylen + ivlen)
-            end
-
+          def self.read_all(datafull, password)
+            data = decode_container(datafull)
+            encrypted = data[:ciphername] != 'none'
+            key_material = derive_key_material(data, password, encrypted)
             decoded = decrypt_private_key(
-              ciphername,
-              encrypted_private,
-              auth_tag,
-              key: key[0...keylen],
-              iv: key[keylen...(keylen + ivlen)],
-              encrypted_key: kdfname == 'bcrypt'
+              data[:ciphername],
+              data[:encrypted_private],
+              data[:auth_tag],
+              key: key_material[0...data[:keylen]],
+              iv: key_material[data[:keylen]...(data[:keylen] + data[:ivlen])],
+              encrypted_key: encrypted
             )
 
-            decoded = Net::SSH::Buffer.new(decoded)
-            check1 = decoded.read_long
-            check2 = decoded.read_long
-
-            raise DecryptError.new("Decrypt failed on private key", encrypted_key: kdfname == 'bcrypt') if (check1 != check2)
-
-            type_name = decoded.read_string
-            case type_name
-            when "ssh-ed25519"
-              PrivKey.new(decoded)
-            else
-              decoded.read_private_keyblob(type_name)
+            begin
+              entries = decode_private_entries(decoded, data)
+            rescue ArgumentError, OpenSSL::PKey::PKeyError, OpenSSL::ASN1::ASN1Error
+              raise unless encrypted
+              raise DecryptError.new("Decrypt failed on private key", encrypted_key: true)
             end
+            entries
+          end
+
+          def self.decode_container(datafull)
+            datafull = datafull.to_s.strip
+            raise ArgumentError, "Expected #{MBEGIN.strip} header" unless datafull.start_with?(MBEGIN)
+            raise ArgumentError, "Expected #{MEND} footer" unless datafull.end_with?(MEND)
+
+            data = datafull[MBEGIN.size...-MEND.size].lines.map(&:strip).join.unpack1("m0")
+            raise ArgumentError, "Expected #{MAGIC} at start of decoded private key" unless
+              data.start_with?(MAGIC + "\0")
+
+            buffer = Net::SSH::Buffer.new(data.byteslice(MAGIC.bytesize + 1, data.bytesize - MAGIC.bytesize - 1))
+            ciphername = read_binary_string(buffer, "cipher name")
+            supported_cipher =
+              begin
+                CipherFactory.supported?(ciphername)
+              rescue StandardError
+                false
+              end
+            raise ArgumentError, "#{ciphername} in private key is not supported" unless supported_cipher
+
+            kdfname = read_binary_string(buffer, "KDF name")
+            raise ArgumentError, "Expected KDF name to be none or bcrypt" unless %w[none bcrypt].include?(kdfname)
+
+            kdfoptions = Net::SSH::Buffer.new(read_binary_string(buffer, "KDF options"))
+            num_keys = buffer.read_long
+            raise ArgumentError, "Private key container does not contain any keys" unless num_keys && num_keys > 0
+
+            public_keys = Array.new(num_keys) do
+              public_key = read_binary_string(buffer, "public key")
+              {
+                blob: public_key,
+                buffer: Net::SSH::Buffer.new(public_key)
+              }
+            end
+
+            encrypted_length = buffer.read_long
+            keylen, blocksize, ivlen = CipherFactory.get_lengths(ciphername, iv_len: true)
+            if encrypted_length.nil? || encrypted_length < blocksize ||
+               (blocksize > 0 && encrypted_length % blocksize != 0)
+              raise ArgumentError, "Private key length is not a multiple of #{blocksize}"
+            end
+
+            encrypted_private = read_exactly(buffer, encrypted_length, "encrypted private section")
+            auth_length = CipherFactory.auth_length(ciphername)
+            auth_tag = auth_length > 0 ? read_exactly(buffer, auth_length, "authentication tag") : nil
+            raise ArgumentError, "Unexpected data after private key container" unless buffer.eof?
+
+            {
+              ciphername: ciphername,
+              kdfname: kdfname,
+              kdfoptions: kdfoptions,
+              public_keys: public_keys,
+              encrypted_private: encrypted_private,
+              encrypted_length: encrypted_length,
+              blocksize: blocksize,
+              auth_tag: auth_tag,
+              keylen: keylen,
+              ivlen: ivlen
+            }
+          end
+
+          def self.derive_key_material(data, password, encrypted)
+            if data[:kdfname] == 'none'
+              raise ArgumentError, "Encrypted private key must use bcrypt KDF" if encrypted
+              return "\x00".b * (data[:keylen] + data[:ivlen])
+            end
+
+            raise ArgumentError, "Unencrypted private key must use none KDF" unless encrypted
+            salt = read_binary_string(data[:kdfoptions], "KDF salt")
+            rounds = data[:kdfoptions].read_long
+            raise ArgumentError, "Invalid KDF options" if rounds.nil? || !data[:kdfoptions].eof?
+            raise DecryptError.new("Decrypt failed on private key", encrypted_key: true) unless rounds > 0
+
+            bcrypt_pbkdf_key(password, salt, data[:keylen] + data[:ivlen], rounds)
+          end
+
+          def self.decode_private_entries(decoded, container)
+            buffer = Net::SSH::Buffer.new(decoded)
+            check1 = buffer.read_long
+            check2 = buffer.read_long
+            raise ArgumentError, "Invalid private key check values" unless
+              check1 && check2 && check1 == check2
+
+            keys = container[:public_keys].map do |public_key|
+              type_name = read_binary_string(buffer, "private key type")
+              outer_type = read_binary_string(public_key[:buffer], "public key type")
+              key = read_private_key(buffer, type_name)
+              unless key.to_blob == public_key[:blob] && type_name == outer_type
+                raise ArgumentError, "Private key does not match public key"
+              end
+
+              key.comment = read_binary_string(buffer, "key comment")
+              key
+            end
+
+            padding_block_size = container[:blocksize].zero? ? 8 : container[:blocksize]
+            entries_length = buffer.position
+            padding_length = padding_block_size - (entries_length % padding_block_size)
+            padding_length = 0 if padding_length == padding_block_size
+            padding = read_exactly(buffer, padding_length, "private key padding")
+            padding.each_byte.with_index do |byte, index|
+              raise ArgumentError, "Invalid private key padding" unless byte == (index + 1) % 256
+            end
+            raise ArgumentError, "Unexpected data after private key entries" unless buffer.eof?
+            keys
+          end
+
+          def self.read_private_key(buffer, type_name)
+            case type_name
+            when 'ssh-ed25519'
+              PrivKey.new(buffer)
+            when 'ssh-rsa'
+              read_rsa_private_key(buffer)
+            when 'ssh-dss'
+              read_dsa_private_key(buffer)
+            when /\Aecdsa-sha2-(nistp\d+)\z/
+              read_ecdsa_private_key(buffer, $1)
+            else
+              raise ArgumentError, "Cannot decode private key of type #{type_name}"
+            end
+          rescue OpenSSL::PKey::PKeyError, OpenSSL::ASN1::ASN1Error, OpenSSL::BNError,
+                 OpenSSL::PKey::EC::Point::Error, TypeError, NoMethodError
+            raise ArgumentError, "Invalid #{type_name} private key"
+          end
+
+          def self.read_rsa_private_key(buffer)
+            n, e, d, iqmp, p, q = 6.times.map { read_bignum(buffer) }
+            raise ArgumentError, "Invalid RSA private key" unless
+              [n, e, d, iqmp, p, q].all? { |number| number > 0 } &&
+              e < n && d < n && p < n && q < n &&
+              n == p * q &&
+              (q * iqmp) % p == 1 &&
+              (e * d) % rsa_lambda(p, q) == 1
+
+            dmp1 = d % (p - 1)
+            dmq1 = d % (q - 1)
+            asn1 = OpenSSL::ASN1::Sequence.new([
+                                               OpenSSL::ASN1::Integer.new(0),
+                                               OpenSSL::ASN1::Integer.new(n),
+                                               OpenSSL::ASN1::Integer.new(e),
+                                               OpenSSL::ASN1::Integer.new(d),
+                                               OpenSSL::ASN1::Integer.new(p),
+                                               OpenSSL::ASN1::Integer.new(q),
+                                               OpenSSL::ASN1::Integer.new(dmp1),
+                                               OpenSSL::ASN1::Integer.new(dmq1),
+                                               OpenSSL::ASN1::Integer.new(iqmp)
+                                             ])
+            build_key(OpenSSL::PKey::RSA, asn1)
+          end
+
+          def self.read_dsa_private_key(buffer)
+            p, q, g, public_number, private_number = 5.times.map { read_bignum(buffer) }
+            raise ArgumentError, "Invalid DSA private key" unless
+              [p, q, g, public_number, private_number].all? { |number| number > 0 } &&
+              private_number < q &&
+              public_number < p &&
+              public_number == g.mod_exp(private_number, p)
+
+            asn1 = OpenSSL::ASN1::Sequence.new([
+                                               OpenSSL::ASN1::Integer.new(0),
+                                               OpenSSL::ASN1::Integer.new(p),
+                                               OpenSSL::ASN1::Integer.new(q),
+                                               OpenSSL::ASN1::Integer.new(g),
+                                               OpenSSL::ASN1::Integer.new(public_number),
+                                               OpenSSL::ASN1::Integer.new(private_number)
+                                             ])
+            build_key(OpenSSL::PKey::DSA, asn1)
+          end
+
+          def self.read_ecdsa_private_key(buffer, curve_name)
+            key_curve_name = read_binary_string(buffer, "ECDSA curve name")
+            public_point = read_binary_string(buffer, "ECDSA public point")
+            encoded_private_scalar = read_binary_string(buffer, "ECDSA private scalar")
+            raise ArgumentError, "ECDSA curve name does not match key type" unless curve_name == key_curve_name
+
+            group = OpenSSL::PKey::EC::Group.new(OpenSSL::PKey::EC::CurveNameAlias.fetch(curve_name))
+            expected_length = (group.degree + 7) / 8
+            point = OpenSSL::PKey::EC::Point.new(group, OpenSSL::BN.new(public_point, 2))
+            private_scalar = encoded_private_scalar[-expected_length, expected_length].to_s
+            scalar_value = OpenSSL::BN.new(private_scalar, 2)
+            order = group.order
+            raise ArgumentError, "Invalid ECDSA private key" unless
+              [expected_length, expected_length + 1].include?(encoded_private_scalar.bytesize) &&
+                scalar_value > 0 && scalar_value < order &&
+                point == group.generator.mul(scalar_value) &&
+                public_point.bytesize == 1 + 2 * expected_length
+
+            asn1 = OpenSSL::ASN1::Sequence.new([
+                                               OpenSSL::ASN1::Integer.new(1),
+                                               OpenSSL::ASN1::OctetString.new(private_scalar),
+                                               OpenSSL::ASN1::ASN1Data.new(
+                                                 [OpenSSL::ASN1::ObjectId.new(group.curve_name)], 0, :CONTEXT_SPECIFIC
+                                               ),
+                                               OpenSSL::ASN1::ASN1Data.new(
+                                                 [OpenSSL::ASN1::BitString.new(public_point)], 1, :CONTEXT_SPECIFIC
+                                               )
+                                             ])
+            key = build_key(OpenSSL::PKey::EC, asn1)
+            raise ArgumentError, "Invalid ECDSA private key" unless key.private? && key.check_key
+            key
+          end
+
+          def self.read_binary_string(buffer, description)
+            string = buffer.read_string
+            raise ArgumentError, "Missing #{description}" if string.nil?
+            binary_string(string)
+          end
+
+          def self.read_exactly(buffer, length, description)
+            data = buffer.read(length)
+            raise ArgumentError, "Missing #{description}" unless data&.bytesize == length
+            binary_string(data)
+          end
+
+          def self.read_bignum(buffer)
+            number = buffer.read_bignum
+            raise ArgumentError, "Missing private key bignum" if number.nil?
+            number
+          end
+
+          def self.build_key(klass, asn1)
+            key = klass.new(asn1.to_der)
+            raise ArgumentError, "Invalid private key" unless key.private?
+            key
+          end
+
+          def self.rsa_lambda(p, q)
+            p_minus_one = p - 1
+            q_minus_one = q - 1
+            p_minus_one.to_i.lcm(q_minus_one.to_i)
+          end
+
+          def self.binary_string(string)
+            string.to_s.dup.force_encoding('BINARY')
           end
 
           def self.bcrypt_pbkdf_key(password, salt, length, rounds)
@@ -148,8 +340,11 @@ module Net
 
             key = BCryptPbkdf::key(password, salt, length, rounds)
             raise DecryptError.new("BCryptPbkdf failed", encrypted_key: true) unless key
-
-            key
+            binary_string(key)
+          rescue DecryptError
+            raise
+          rescue ArgumentError
+            raise DecryptError.new("BCryptPbkdf failed", encrypted_key: true)
           end
 
           def self.require_bcrypt_pbkdf
@@ -221,11 +416,11 @@ module Net
           CipherFactory = Net::SSH::Transport::CipherFactory
 
           attr_reader :sign_key
+          attr_accessor :comment
 
           def initialize(buffer)
             pk = buffer.read_string
             sk = buffer.read_string
-            _comment = buffer.read_string
 
             ED25519.validate_key_bytes!(pk, "public key", KEY_BYTES)
             ED25519.validate_key_bytes!(sk, "private key field", PRIVATE_KEY_BYTES)

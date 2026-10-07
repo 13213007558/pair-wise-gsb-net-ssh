@@ -2,11 +2,124 @@ require_relative '../common'
 require 'net/ssh/authentication/ed25519_loader'
 require 'net/ssh/key_factory'
 require 'base64'
+require 'securerandom'
 
 module Authentication
   class TestED25519 < NetSSHTest
     def setup
       skip "Ed25519 is not available" unless Net::SSH::Authentication::ED25519Loader::LOADED
+    end
+
+    def test_openssh_container_reads_all_keys_and_comments
+      container = openssh_container([ed25519_entry("first comment"), ed25519_entry("second comment")])
+      keys = Net::SSH::Authentication::ED25519::OpenSSHPrivateKeyLoader.read_all(container, nil)
+
+      assert_equal 2, keys.length
+      assert_equal "first comment", keys[0].comment
+      assert_equal "second comment", keys[1].comment
+      assert_equal keys[0].to_blob, Net::SSH::Authentication::ED25519::PubKey.new(keys[0].public_key_bytes).to_blob
+      assert_equal true, keys[1].public_key.ssh_do_verify(keys[1].ssh_do_sign("signed"), "signed")
+    end
+
+    def test_openssh_container_reads_mixed_key_types
+      rsa = OpenSSL::PKey::RSA.generate(2048)
+      ed25519 = ed25519_entry("ed25519 comment")
+      container = openssh_container([rsa_entry(rsa, "rsa comment"), ed25519])
+      keys = Net::SSH::Authentication::ED25519::OpenSSHPrivateKeyLoader.read_all(container, nil)
+
+      assert_kind_of OpenSSL::PKey::RSA, keys[0]
+      assert_kind_of Net::SSH::Authentication::ED25519::PrivKey, keys[1]
+      assert_equal rsa.to_blob, keys[0].to_blob
+      assert_equal ["rsa comment", "ed25519 comment"], keys.map(&:comment)
+    end
+
+    def test_single_key_interface_still_returns_one_key_for_multi_key_container
+      container = openssh_container([ed25519_entry("first"), ed25519_entry("second")])
+
+      assert_kind_of Net::SSH::Authentication::ED25519::PrivKey,
+                     Net::SSH::KeyFactory.load_data_private_key(container, nil, false)
+    end
+
+    def test_encrypted_multi_key_container_decrypts_with_passphrase
+      skip "bcrypt_pbkdf is required" unless defined?(BCryptPbkdf)
+
+      entries = [ed25519_entry("encrypted one"), ed25519_entry("encrypted two")]
+      container = openssh_container(entries, ciphername: 'aes256-ctr', kdfname: 'bcrypt', passphrase: 'secret')
+      keys = Net::SSH::KeyFactory.load_data_private_keys(container, 'secret', false)
+
+      assert_equal ["encrypted one", "encrypted two"], keys.map(&:comment)
+      assert_equal entries.map { |entry| "\x00\x00\x00\x0bssh-ed25519\x00\x00\x00 " + entry[:public] },
+                   keys.map(&:to_blob)
+    end
+
+    def test_encrypted_container_prompts_at_most_three_times
+      prompt = mock('prompt')
+      prompter = mock('prompter')
+      prompt.expects(:start).once.returns(prompter)
+      prompter.expects(:ask).times(3).returns("wrong", "also wrong", "still wrong")
+      prompter.expects(:success).never
+
+      assert_raises(Net::SSH::Authentication::ED25519::OpenSSHPrivateKeyLoader::DecryptError) do
+        Net::SSH::KeyFactory.load_data_private_keys(private_key_pwd, nil, true, '', prompt)
+      end
+    end
+
+    def test_wrong_passphrase_error_does_not_contain_secret
+      error = assert_raises(Net::SSH::Authentication::ED25519::OpenSSHPrivateKeyLoader::DecryptError) do
+        Net::SSH::Authentication::ED25519::OpenSSHPrivateKeyLoader.read(private_key_pwd, 'do-not-leak')
+      end
+
+      refute_match(/do-not-leak/, error.message)
+    end
+
+    def test_truncated_container_raises_instead_of_returning_empty_result
+      container = openssh_container([ed25519_entry("truncated")])
+
+      assert_raises(ArgumentError) do
+        Net::SSH::Authentication::ED25519::OpenSSHPrivateKeyLoader.read_all(container[0...-8], nil)
+      end
+    end
+
+    def test_mismatched_outer_public_key_is_rejected
+      entry = ed25519_entry("mismatch")
+      mismatched = entry.dup
+      mismatched[:public_blob] = ed25519_entry("other")[:public_blob]
+      container = openssh_container([entry], public_entries: [mismatched])
+
+      error = assert_raises(ArgumentError) do
+        Net::SSH::Authentication::ED25519::OpenSSHPrivateKeyLoader.read_all(container, nil)
+      end
+      refute_empty error.message
+    end
+
+    def test_invalid_checkints_are_rejected
+      container = openssh_container([ed25519_entry("checkints")])
+      data = Base64.decode64(openssh_payload(container))
+      entry = ed25519_entry("checkints")
+      length_position = data.bytesize - entry[:private_blob].bytesize
+      data[length_position, 4] = [(data.getbyte(length_position) ^ 1)].pack('C')
+
+      assert_raises(ArgumentError) do
+        Net::SSH::Authentication::ED25519::OpenSSHPrivateKeyLoader.read_all(pem_wrap(data), nil)
+      end
+    end
+
+    def test_invalid_padding_is_rejected
+      entry = ed25519_entry("padding")
+      data = Base64.decode64(openssh_payload(openssh_container([entry])))
+      data.setbyte(data.bytesize - 1, data.getbyte(data.bytesize - 1) ^ 0xff)
+
+      assert_raises(ArgumentError) do
+        Net::SSH::Authentication::ED25519::OpenSSHPrivateKeyLoader.read_all(pem_wrap(data), nil)
+      end
+    end
+
+    def test_encrypted_cipher_without_kdf_is_rejected
+      container = openssh_container([ed25519_entry("combo")], ciphername: 'aes256-ctr')
+
+      assert_raises(ArgumentError) do
+        Net::SSH::Authentication::ED25519::OpenSSHPrivateKeyLoader.read_all(container, nil)
+      end
     end
 
     def test_no_pwd_key
@@ -158,6 +271,93 @@ module Authentication
       self.assert_raises(Net::SSH::Authentication::ED25519::OpenSSHPrivateKeyLoader::DecryptError) do
         Net::SSH::Authentication::ED25519::PrivKey.read(private_key_no_rounds, 'pwd')
       end
+    end
+
+    private
+
+    def ed25519_entry(comment)
+      private_key = SecureRandom.random_bytes(32)
+      public_key = OpenSSL::PKey.new_raw_private_key('ED25519', private_key).raw_public_key
+      private_blob = decoded_ed25519_entry(public: public_key, private: private_key, comment: comment)
+      {
+        type: 'ssh-ed25519',
+        public_blob: Net::SSH::Buffer.from(:mstring, 'ssh-ed25519'.b, :string, public_key).to_s,
+        private_blob: private_blob,
+        public: public_key,
+        private: private_key,
+        comment: comment
+      }
+    end
+
+    def rsa_entry(key, comment)
+      private_blob = Net::SSH::Buffer.from(
+        :mstring, 'ssh-rsa'.b,
+        :bignum, key.params['n'],
+        :bignum, key.params['e'],
+        :bignum, key.params['d'],
+        :bignum, key.params['iqmp'],
+        :bignum, key.params['p'],
+        :bignum, key.params['q'],
+        :string, comment
+      ).to_s
+      { type: 'ssh-rsa', public_blob: key.to_blob, private_blob: private_blob }
+    end
+
+    def decoded_ed25519_entry(public:, private:, comment:)
+      Net::SSH::Buffer.from(
+        :mstring, 'ssh-ed25519'.b,
+        :string, public,
+        :string, private + public,
+        :string, comment
+      ).to_s
+    end
+
+    def openssh_container(entries, ciphername: 'none', kdfname: 'none', kdfoptions: ''.b,
+                          passphrase: nil, public_entries: entries)
+      checkint = SecureRandom.random_number(2**32)
+      private_data = [checkint, checkint].pack('N2')
+      private_data += entries.map { |entry| entry[:private_blob] }.join
+      block_size = ciphername == 'none' ? 8 : 16
+      padding_length = block_size - (private_data.bytesize % block_size)
+      padding_length = 0 if padding_length == block_size
+      private_data += (1..padding_length).map(&:chr).join
+
+      if kdfname == 'bcrypt'
+        require 'bcrypt_pbkdf'
+        salt = SecureRandom.random_bytes(16)
+        rounds = 1
+        key_material = BCryptPbkdf::key(passphrase, salt, 48, rounds)
+        kdfoptions = Net::SSH::Buffer.from(:string, salt, :long, rounds).to_s
+        cipher = OpenSSL::Cipher.new('aes-256-ctr')
+        cipher.encrypt
+        cipher.key = key_material[0...32]
+        cipher.iv = key_material[32...48]
+        private_data = cipher.update(private_data) + cipher.final
+      end
+
+      public_blobs = public_entries.map do |entry|
+        entry[:public_blob]
+      end
+      data = Net::SSH::Buffer.from(
+        :raw, "openssh-key-v1\0".b,
+        :string, ciphername,
+        :string, kdfname,
+        :string, kdfoptions,
+        :long, public_blobs.length,
+        :string, public_blobs,
+        :long, private_data.bytesize,
+        :raw, private_data
+      ).to_s
+      pem_wrap(data)
+    end
+
+    def pem_wrap(data)
+      encoded = [data].pack('m')
+      "-----BEGIN OPENSSH PRIVATE KEY-----\n#{encoded}-----END OPENSSH PRIVATE KEY-----\n"
+    end
+
+    def openssh_payload(pem)
+      pem.lines.map(&:strip).reject { |line| line.include?('OPENSSH PRIVATE KEY') }.join
     end
 
     def assert_pwd_key_matches_public_key(private_key, public_key)

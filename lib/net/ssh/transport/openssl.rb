@@ -25,6 +25,15 @@ module OpenSSL
   module PKey
     class PKey
       include Net::SSH::Authentication::PubKeyFingerprint
+
+      # Comment associated with an entry in an OpenSSH private-key container.
+      # Traditional PEM/ASN.1 keys do not carry this metadata and default to
+      # the empty string.
+      attr_accessor :comment
+
+      def comment
+        @comment ||= "".b
+      end
     end
 
     # This class is originally defined in the OpenSSL module. As needed, methods

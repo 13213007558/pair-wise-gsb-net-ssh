@@ -41,38 +41,28 @@ module Net
           load_data_private_key(data, passphrase, ask_passphrase, filename, prompt)
         end
 
+        # Like load_private_key, but returns every key contained in an OpenSSH
+        # private-key file. Other supported single-key formats return one key.
+        def load_private_keys(filename, passphrase = nil, ask_passphrase = true, prompt = Prompt.default)
+          data = File.read(File.expand_path(filename))
+          load_data_private_keys(data, passphrase, ask_passphrase, filename, prompt)
+        end
+
         # Loads a private key. It will correctly determine
         # whether the file describes an RSA or DSA key, and will load it
         # appropriately. The new key is returned. If the key itself is
         # encrypted (requiring a passphrase to use), the user will be
         # prompted to enter their password unless passphrase works.
         def load_data_private_key(data, passphrase = nil, ask_passphrase = true, filename = "", prompt = Prompt.default)
-          key_type = classify_key(data, filename)
+          load_private_key_data(classify_key(data, filename), data, passphrase, ask_passphrase,
+                                filename, prompt, false)
+        end
 
-          encrypted_key = nil
-          tries = 0
-
-          prompter = nil
-          result =
-            begin
-              key_type.read(data, passphrase || 'invalid')
-            rescue *key_type.error_classes => e
-              encrypted_key = !!key_type.encrypted_key?(data, e) if encrypted_key.nil?
-              if encrypted_key && ask_passphrase
-                tries += 1
-                if tries <= 3
-                  prompter ||= prompt.start(type: 'private_key', filename: filename, sha: Digest::SHA256.digest(data))
-                  passphrase = prompter.ask("Enter passphrase for #{filename}:", false)
-                  retry
-                else
-                  raise
-                end
-              else
-                raise
-              end
-            end
-          prompter.success if prompter
-          result
+        # Like load_data_private_key, but returns all keys in an OpenSSH
+        # private-key container.
+        def load_data_private_keys(data, passphrase = nil, ask_passphrase = true, filename = "", prompt = Prompt.default)
+          load_private_key_data(classify_key(data, filename), data, passphrase, ask_passphrase,
+                                filename, prompt, true)
         end
 
         # Loads a public key from a file. It will correctly determine whether
@@ -110,6 +100,10 @@ module Net
             raise Exception, "TODO subclasses should implement read"
           end
 
+          def self.read_all(key_data, passphrase)
+            [read(key_data, passphrase)]
+          end
+
           def self.error_classes
             raise Exception, "TODO subclasses should implement read"
           end
@@ -122,6 +116,10 @@ module Net
         class OpenSSHPrivateKeyType < KeyType
           def self.read(key_data, passphrase)
             Net::SSH::Authentication::ED25519::OpenSSHPrivateKeyLoader.read(key_data, passphrase)
+          end
+
+          def self.read_all(key_data, passphrase)
+            Net::SSH::Authentication::ED25519::OpenSSHPrivateKeyLoader.read_all(key_data, passphrase)
           end
 
           def self.error_classes
@@ -211,6 +209,34 @@ module Net
           else
             raise OpenSSL::PKey::PKeyError, "not a private key (#{filename})"
           end
+        end
+
+        def load_private_key_data(key_type, data, passphrase, ask_passphrase, filename, prompt, all_keys)
+          encrypted_key = nil
+          tries = 0
+          prompter = nil
+          reader = all_keys ? :read_all : :read
+
+          result =
+            begin
+              key_type.public_send(reader, data, passphrase || 'invalid')
+            rescue *key_type.error_classes => e
+              encrypted_key = !!key_type.encrypted_key?(data, e) if encrypted_key.nil?
+              if encrypted_key && ask_passphrase
+                tries += 1
+                if tries <= 3
+                  prompter ||= prompt.start(type: 'private_key', filename: filename, sha: Digest::SHA256.digest(data))
+                  passphrase = prompter.ask("Enter passphrase for #{filename}:", false)
+                  retry
+                else
+                  raise
+                end
+              else
+                raise
+              end
+            end
+          prompter.success if prompter
+          result
         end
       end
     end
