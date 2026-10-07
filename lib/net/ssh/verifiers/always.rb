@@ -45,6 +45,10 @@ module Net
           yield
         end
 
+        def verifies_host_key_signature?
+          true
+        end
+
         private
 
         # Enforces the @cert-authority certificate constraints for entries that

@@ -69,7 +69,7 @@ module Net
       max_win_size send_env set_env use_agent number_of_password_prompts
       append_all_supported_algorithms non_interactive password_prompt
       agent_socket_factory minimum_dh_bits verify_host_key
-      fingerprint_hash check_host_ip pubkey_algorithms
+      fingerprint_hash check_host_ip pubkey_algorithms update_host_keys
     ]
 
     # The standard means of starting a new SSH connection. When used with a
@@ -216,6 +216,10 @@ module Net
     #   the +:fingerprint+ and the +:session+. Returning true accepts the host key,
     #   returning false declines it and closes the connection.
     # * :fingerprint_hash => 'MD5' or 'SHA256', defaults to 'SHA256'
+    # * :update_host_keys => set to :append, :ask, or "ask" to append newly
+    #   proven host keys. Set to :replace, true, :yes, or "yes" to replace the
+    #   target's complete set after every reported key has proven ownership.
+    #   Defaults to nil/false.
     # If +user+ parameter is nil it defaults to USER from ssh_config, or
     # local username
     def self.start(host, user = nil, options = {}, &block)
@@ -238,6 +242,7 @@ module Net
       end
 
       _support_deprecated_option_paranoid(options)
+      Connection::HostKeyUpdater.mode_for(options[:update_host_keys])
 
       if options[:verbose]
         options[:logger].level = case options[:verbose]

@@ -1,6 +1,7 @@
 require 'strscan'
 require 'openssl'
 require 'delegate'
+require 'tempfile'
 require 'net/ssh/buffer'
 require 'net/ssh/authentication/ed25519_loader'
 
@@ -113,6 +114,22 @@ module Net
         @host_keys.push(key)
       end
 
+      def update_host_keys(keys, replace: false)
+        keys = Array(keys)
+        if @known_hosts.respond_to?(:update)
+          @known_hosts.update(@host, keys, replace: replace, options: @options)
+        else
+          keys.each { |key| @known_hosts.add(@host, key, @options) }
+        end
+        if replace
+          @host_keys.replace(keys)
+        else
+          keys.each do |key|
+            @host_keys << key unless @host_keys.any? { |existing| existing.to_blob == key.to_blob }
+          end
+        end
+      end
+
       def each(&block)
         @host_keys.each(&block)
       end
@@ -190,6 +207,19 @@ module Net
             return
           rescue SystemCallError
             # try the next hostfile
+          end
+        end
+
+        def update(host, keys, replace: false, options: {})
+          files = hostfiles(options, :user)
+          source = files.find do |file|
+            File.readable?(file) && KnownHosts.new(file).keys_for(host, options).any?
+          end
+
+          if source
+            KnownHosts.new(source).update(host, keys, replace: replace)
+          else
+            keys.each { |key| add(host, key, options) }
           end
         end
       end
@@ -301,6 +331,138 @@ module Net
         File.open(source, "a") do |file|
           blob = [Net::SSH::Buffer.from(:key, key).to_s].pack("m*").gsub(/\s/, "")
           file.puts "#{host} #{key.ssh_type} #{blob}"
+        end
+      end
+
+      def update(host, keys, replace: false)
+        content = File.exist?(source) ? File.read(source) : ""
+        updated = update_content(content, host, keys, replace)
+        return false if updated == content
+
+        write_atomically(updated)
+        true
+      end
+
+      private
+
+      def update_content(content, host, keys, replace)
+        target_patterns = host.split(",")
+        key_blobs = keys.map(&:to_blob)
+        hashed = false
+        hashed_patterns = []
+        output = []
+        content.lines(chomp: true).each do |line|
+          parsed = parse_entry(line)
+          if parsed.nil? || !target_entry?(parsed, target_patterns)
+            output << line
+            next
+          end
+
+          hashed ||= hashed_entry?(parsed)
+          if hashed_entry?(parsed) && matched_hashed_pattern(parsed, target_patterns)
+            hashed_patterns << { pattern: matched_hashed_pattern(parsed, target_patterns), hashed: parsed[:hosts] }
+          end
+
+          unless replace && removable_entry?(parsed, target_patterns) && !parsed[:marker] && !key_blobs.include?(parsed[:blob])
+            output << line
+          end
+        end
+
+        existing_target_blobs = output.filter_map do |line|
+          parsed = parse_entry(line)
+          parsed && target_entry?(parsed, target_patterns) ? parsed[:blob] : nil
+        end
+
+        new_keys = keys.reject { |key| existing_target_blobs.include?(key.to_blob) }
+        new_keys.each do |key|
+          new_entry_patterns(host, target_patterns, hashed, hashed_patterns).uniq.each do |pattern|
+            output << format_entry(pattern, key)
+          end
+        end
+
+        output.join("\n") + (content.end_with?("\n") || (content.empty? && !output.empty?) ? "\n" : "")
+      end
+
+      def parse_entry(line)
+        return nil if line.empty? || line.start_with?('#')
+
+        fields = line.split(' ', 5)
+        return nil if fields.length < 3
+
+        if fields.first.start_with?('@')
+          marker, hosts, type, encoded_key, comment = fields
+        else
+          marker = nil
+          hosts, type, encoded_key, comment = fields
+        end
+
+        return nil unless SUPPORTED_TYPE.include?(type)
+
+        blob = encoded_key.unpack1("m*")
+        Net::SSH::Buffer.new(blob).read_key
+        {
+          marker: marker,
+          hosts: hosts,
+          type: type,
+          blob: blob,
+          comment: comment
+        }
+      rescue StandardError
+        nil
+      end
+
+      def target_entry?(entry, target_patterns)
+        patterns = entry[:hosts].split(",")
+        return true if patterns.length == 1 && target_patterns.include?(patterns.first)
+
+        patterns == target_patterns || known_host_hash?(patterns, target_patterns)
+      end
+
+      def hashed_entry?(entry)
+        entry[:hosts].split(",").one? && entry[:hosts].start_with?("|1|")
+      end
+
+      def matched_hashed_pattern(entry, target_patterns)
+        return nil unless hashed_entry?(entry)
+
+        target_patterns.find { |pattern| known_host_hash?(entry[:hosts].split(","), [pattern]) }
+      end
+
+      def removable_entry?(entry, target_patterns)
+        patterns = entry[:hosts].split(",")
+        hashed_entry?(entry) || patterns == target_patterns
+      end
+
+      def new_entry_patterns(host, target_patterns, hashed, existing_hashed_patterns)
+        return [host] unless hashed
+
+        existing_hashed_patterns.map { |item| item[:hashed] } +
+          target_patterns.reject { |pattern| existing_hashed_patterns.any? { |item| item[:pattern] == pattern } }
+                           .map { |pattern| hash_host(pattern) }
+      end
+
+      def format_entry(pattern, key)
+        "#{pattern} #{key.ssh_type} #{encoded_key(key)}"
+      end
+
+      def encoded_key(key)
+        [Net::SSH::Buffer.from(:key, key).to_s].pack("m*").gsub(/\s/, "")
+      end
+
+      def hash_host(pattern)
+        salt = OpenSSL::Random.random_bytes(20)
+        digest = OpenSSL::Digest.new('sha1')
+        hmac = OpenSSL::HMAC.digest(digest, salt, pattern)
+        "|1|#{[salt].pack('m0')}|#{[hmac].pack('m0')}"
+      end
+
+      def write_atomically(content)
+        mode = File.exist?(source) ? File.stat(source).mode : nil
+        Tempfile.create(File.basename(source), File.dirname(source)) do |file|
+          file.write(content)
+          file.chmod(mode) if mode
+          file.close
+          File.rename(file.path, source)
         end
       end
     end

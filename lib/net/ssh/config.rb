@@ -34,6 +34,7 @@ module Net
     # * PubKeyAuthentication => maps to the :auth_methods option
     # * RekeyLimit => :rekey_limit
     # * StrictHostKeyChecking => :verify_host_key
+    # * UpdateHostKeys => :update_host_keys
     # * User => :user
     # * UserKnownHostsFile => :user_known_hosts_file
     # * NumberOfPasswordPrompts => :number_of_password_prompts
@@ -235,6 +236,12 @@ module Net
           case key
           when :stricthostkeychecking
             hash[:verify_host_key] = translate_verify_host_key(value)
+          when :updatehostkeys
+            hash[:update_host_keys] = case value
+                                      when "ask" then :append
+                                      when "yes" then :replace
+                                      else value
+                                      end
           when :ciphers
             hash[:encryption] = value.split(/,/)
           when :hostbasedauthentication

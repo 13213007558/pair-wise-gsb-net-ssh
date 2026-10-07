@@ -4,6 +4,7 @@ require 'net/ssh/connection/constants'
 require 'net/ssh/service/forward'
 require 'net/ssh/connection/keepalive'
 require 'net/ssh/connection/event_loop'
+require 'net/ssh/connection/host_key_updater'
 
 module Net
   module SSH
@@ -83,6 +84,9 @@ module Net
           @max_win_size = (options.key?(:max_win_size) ? options[:max_win_size] : 0x20000)
 
           @keepalive = Keepalive.new(self)
+
+          update_mode = HostKeyUpdater.mode_for(options[:update_host_keys])
+          HostKeyUpdater.new(self, update_mode) if update_mode
 
           @event_loop = options[:event_loop] || SingleSessionEventLoop.new
           @event_loop.register(self)

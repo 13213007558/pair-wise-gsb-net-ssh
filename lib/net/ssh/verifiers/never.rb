@@ -13,6 +13,10 @@ module Net
         def verify_signature(&block)
           true
         end
+
+        def verifies_host_key_signature?
+          false
+        end
       end
     end
   end

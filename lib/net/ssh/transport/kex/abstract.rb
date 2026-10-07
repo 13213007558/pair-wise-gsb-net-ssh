@@ -47,7 +47,9 @@ module Net
           def exchange_keys
             result = send_kexinit
             verify_server_key(result[:server_key])
+            known_before_kex = connection.host_key_known_before_kex?
             session_id = verify_signature(result)
+            connection.verify_host_key_trusted! if known_before_kex && connection.host_key_signature_verified?
             confirm_newkeys
 
             {

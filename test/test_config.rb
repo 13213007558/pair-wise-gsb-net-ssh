@@ -189,6 +189,13 @@ class TestConfig < NetSSHTest
     assert_equal :accept_new, net_ssh[:verify_host_key]
   end
 
+  def test_translate_update_host_keys
+    { "ask" => :append, "yes" => :replace, "no" => "no" }.each do |value, expected|
+      net_ssh = Net::SSH::Config.translate("updatehostkeys" => value)
+      assert_equal expected, net_ssh[:update_host_keys]
+    end
+  end
+
   def test_translate_should_turn_off_authentication_methods
     open_ssh = {
       'hostbasedauthentication' => false,

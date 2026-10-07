@@ -98,6 +98,23 @@ module Net
           end
         end
 
+        def host_key_known_before_kex?
+          host_keys.any?
+        end
+
+        def verify_host_key_trusted!
+          @host_keys_trusted = true
+        end
+
+        def host_keys_trusted?
+          @host_keys_trusted == true
+        end
+
+        def host_key_signature_verified?
+          verifier = host_key_verifier
+          !verifier.respond_to?(:verifies_host_key_signature?) || verifier.verifies_host_key_signature?
+        end
+
         # Returns the host (and possibly IP address) in a format compatible with
         # SSH known-host files.
         def host_as_string
@@ -290,6 +307,10 @@ module Net
 
           def verify_signature(&block)
             yield
+          end
+
+          def verifies_host_key_signature?
+            false
           end
         end
 
