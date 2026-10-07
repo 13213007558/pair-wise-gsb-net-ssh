@@ -69,7 +69,7 @@ module Net
       max_win_size send_env set_env use_agent number_of_password_prompts
       append_all_supported_algorithms non_interactive password_prompt
       agent_socket_factory minimum_dh_bits verify_host_key
-      fingerprint_hash check_host_ip pubkey_algorithms
+      fingerprint_hash check_host_ip pubkey_algorithms krl_file
     ]
 
     # The standard means of starting a new SSH connection. When used with a
@@ -118,6 +118,9 @@ module Net
     #   be forwarded
     # * :known_hosts => a custom object holding known hosts records.
     #   It must implement #search_for and `add` in a similiar manner as KnownHosts.
+    # * :krl_file => the location of a local, trusted OpenSSH key revocation
+    #   list (KRL) file. When set, host keys (and host certificates) found on
+    #   the list are rejected before any known-hosts lookup happens.
     # * :global_known_hosts_file => the location of the global known hosts
     #   file. Set to an array if you want to specify multiple global known
     #   hosts files. Defaults to %w(/etc/ssh/ssh_known_hosts /etc/ssh/ssh_known_hosts2).

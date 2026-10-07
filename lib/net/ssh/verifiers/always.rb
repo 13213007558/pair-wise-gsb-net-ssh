@@ -1,5 +1,6 @@
 require 'net/ssh/errors'
 require 'net/ssh/known_hosts'
+require 'net/ssh/krl'
 
 module Net
   module SSH
@@ -14,6 +15,8 @@ module Net
       # Otherwise, this returns true.
       class Always
         def verify(arguments)
+          check_krl!(arguments)
+
           host_keys = arguments[:session].host_keys
 
           # We've never seen this host before, so raise an exception.
@@ -46,6 +49,25 @@ module Net
         end
 
         private
+
+        # Consults the OpenSSH KRL named by the :krl_file option, if any,
+        # before the known-hosts lookup. A revoked key is rejected with
+        # HostKeyMismatch (not HostKeyUnknown) so AcceptNew does not swallow
+        # the failure and remember the revoked key. A corrupt or unreadable
+        # list surfaces as Net::SSH::KRL::CorruptError / SystemCallError
+        # rather than being mistaken for a revoked key.
+        def check_krl!(arguments)
+          session = arguments[:session]
+          options = session.options if session.respond_to?(:options)
+          krl_file = options && options[:krl_file]
+          return unless krl_file
+
+          revocation = Net::SSH::KRL.load_file(krl_file).revocation(arguments[:key])
+          return unless revocation
+
+          process_cache_miss(session.host_keys, arguments, HostKeyMismatch,
+                             "host key revoked by #{krl_file} (#{revocation.reason})")
+        end
 
         # Enforces the @cert-authority certificate constraints for entries that
         # implement them (Net::SSH::HostKeyEntries::CertAuthority). Non-certificate

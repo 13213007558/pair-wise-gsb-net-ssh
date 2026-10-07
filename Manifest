@@ -25,6 +25,7 @@ lib/net/ssh/connection/term.rb
 lib/net/ssh/errors.rb
 lib/net/ssh/key_factory.rb
 lib/net/ssh/known_hosts.rb
+lib/net/ssh/krl.rb
 lib/net/ssh/loggable.rb
 lib/net/ssh/packet.rb
 lib/net/ssh/prompt.rb
@@ -105,6 +106,7 @@ test/test_buffer.rb
 test/test_buffered_io.rb
 test/test_config.rb
 test/test_key_factory.rb
+test/test_krl.rb
 test/transport/hmac/test_md5.rb
 test/transport/hmac/test_md5_96.rb
 test/transport/hmac/test_none.rb
