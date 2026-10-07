@@ -104,7 +104,8 @@ module Net
             result[:server_dh_pubkey] = buffer.read_bignum
             result[:shared_secret] = OpenSSL::BN.new(dh.compute_key(result[:server_dh_pubkey]), 2)
 
-            sig_buffer = Net::SSH::Buffer.new(buffer.read_string)
+            result[:server_sig_blob] = buffer.read_string
+            sig_buffer = Net::SSH::Buffer.new(result[:server_sig_blob])
             sig_type = sig_buffer.read_string
             if sig_type != algorithms.host_key_format
               raise Net::SSH::Exception,

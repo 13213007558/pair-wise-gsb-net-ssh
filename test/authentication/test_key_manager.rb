@@ -370,6 +370,126 @@ module Authentication
       manager.sign(rsa, "hello, world")
     end
 
+    def test_session_bind_is_attempted_when_agent_connection_is_established
+      bound_agent = stub("agent")
+      Net::SSH::Authentication::Agent.expects(:connect).returns(bound_agent)
+      bound_agent.expects(:bind_session).with("exchange-hash", rsa_pk, "sig-blob", forwarding: false).returns(:bound)
+
+      manager.bind_session(session_id: "exchange-hash", hostkey: rsa_pk, signature: "sig-blob")
+      manager.agent
+
+      assert_equal :bound, manager.session_bind_status
+    end
+
+    def test_session_bind_is_attempted_immediately_if_agent_already_connected
+      bound_agent = stub("agent")
+      Net::SSH::Authentication::Agent.expects(:connect).returns(bound_agent)
+      manager.agent
+
+      bound_agent.expects(:bind_session).with("exchange-hash", rsa_pk, "sig-blob", forwarding: false).returns(:bound)
+      manager.bind_session(session_id: "exchange-hash", hostkey: rsa_pk, signature: "sig-blob")
+
+      assert_equal :bound, manager.session_bind_status
+    end
+
+    def test_session_bind_is_skipped_when_option_is_false
+      bound_agent = stub("agent")
+      Net::SSH::Authentication::Agent.expects(:connect).returns(bound_agent)
+      bound_agent.expects(:bind_session).never
+
+      manager(session_bind: false).bind_session(session_id: "exchange-hash", hostkey: rsa_pk, signature: "sig-blob")
+      manager.agent
+
+      assert_nil manager.session_bind_status
+    end
+
+    def test_session_bind_is_reattempted_when_agent_reconnects
+      first_agent = stub("first-agent")
+      second_agent = stub("second-agent")
+      Net::SSH::Authentication::Agent.expects(:connect).twice.returns(first_agent).then.returns(second_agent)
+      first_agent.expects(:bind_session).returns(:bound)
+      first_agent.expects(:close)
+      second_agent.expects(:bind_session).returns(:bound)
+
+      manager.bind_session(session_id: "exchange-hash", hostkey: rsa_pk, signature: "sig-blob")
+      manager.agent
+      assert_equal :bound, manager.session_bind_status
+
+      manager.finish
+      assert_nil manager.session_bind_status
+
+      manager.agent
+      assert_equal :bound, manager.session_bind_status
+    end
+
+    def test_sign_with_agent_falls_back_to_unbound_connection_when_bind_unsupported
+      bound_agent = stub("agent", identities: [rsa_pk])
+      Net::SSH::Authentication::Agent.expects(:connect).returns(bound_agent)
+      bound_agent.expects(:bind_session).returns(:unsupported)
+      bound_agent.expects(:sign).with(rsa_pk, "hello, world").returns("signed")
+
+      manager.bind_session(session_id: "exchange-hash", hostkey: rsa_pk, signature: "sig-blob")
+      manager.each_identity { |identity| }
+
+      assert_equal :unsupported, manager.session_bind_status
+      assert_equal "signed", manager.sign(rsa_pk, "hello, world")
+    end
+
+    def test_sign_with_agent_falls_back_to_unbound_connection_when_bind_refused
+      bound_agent = stub("agent", identities: [rsa_pk])
+      Net::SSH::Authentication::Agent.expects(:connect).returns(bound_agent)
+      bound_agent.expects(:bind_session).returns(:refused)
+      bound_agent.expects(:sign).with(rsa_pk, "hello, world").returns("signed")
+
+      manager.bind_session(session_id: "exchange-hash", hostkey: rsa_pk, signature: "sig-blob")
+      manager.each_identity { |identity| }
+
+      assert_equal :refused, manager.session_bind_status
+      assert_equal "signed", manager.sign(rsa_pk, "hello, world")
+    end
+
+    def test_sign_with_required_session_bind_raises_when_bind_refused
+      bound_agent = stub("agent", identities: [rsa_pk])
+      Net::SSH::Authentication::Agent.expects(:connect).returns(bound_agent)
+      bound_agent.expects(:bind_session).returns(:refused)
+      bound_agent.expects(:sign).never
+
+      manager(session_bind: :required).bind_session(session_id: "exchange-hash", hostkey: rsa_pk, signature: "sig-blob")
+      manager.each_identity { |identity| }
+
+      error = assert_raises(Net::SSH::Authentication::KeyManagerError) do
+        manager.sign(rsa_pk, "hello, world")
+      end
+      assert_match(/refused/, error.message)
+    end
+
+    def test_sign_with_required_session_bind_raises_when_bind_unsupported
+      bound_agent = stub("agent", identities: [rsa_pk])
+      Net::SSH::Authentication::Agent.expects(:connect).returns(bound_agent)
+      bound_agent.expects(:bind_session).returns(:unsupported)
+      bound_agent.expects(:sign).never
+
+      manager(session_bind: :required).bind_session(session_id: "exchange-hash", hostkey: rsa_pk, signature: "sig-blob")
+      manager.each_identity { |identity| }
+
+      error = assert_raises(Net::SSH::Authentication::KeyManagerError) do
+        manager.sign(rsa_pk, "hello, world")
+      end
+      assert_match(/does not support/, error.message)
+    end
+
+    def test_sign_with_required_session_bind_succeeds_when_bound
+      bound_agent = stub("agent", identities: [rsa_pk])
+      Net::SSH::Authentication::Agent.expects(:connect).returns(bound_agent)
+      bound_agent.expects(:bind_session).returns(:bound)
+      bound_agent.expects(:sign).with(rsa_pk, "hello, world").returns("signed")
+
+      manager(session_bind: :required).bind_session(session_id: "exchange-hash", hostkey: rsa_pk, signature: "sig-blob")
+      manager.each_identity { |identity| }
+
+      assert_equal "signed", manager.sign(rsa_pk, "hello, world")
+    end
+
     private
 
     def stub_file_private_key(name, key, public_key, options = {})

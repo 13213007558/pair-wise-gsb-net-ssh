@@ -238,6 +238,38 @@ module Transport
       assert_exchange_results
     end
 
+    def test_session_bind_proof_is_preserved_from_initial_key_exchange_across_rekey
+      hostkey = OpenSSL::PKey::RSA.new(512)
+      other_hostkey = OpenSSL::PKey::RSA.new(512)
+
+      transport.expect do |_t, buffer|
+        assert_kexinit(buffer)
+        install_mock_key_exchange(buffer, session_id: "initial-hash", server_key: hostkey, server_sig_blob: "initial-sig")
+      end
+      install_mock_algorithm_lookups(hash: "initial-hash")
+      algorithms.accept_kexinit(kexinit)
+
+      assert_equal "initial-hash", algorithms.session_id
+      assert_equal hostkey, algorithms.initial_hostkey
+      assert_equal "initial-sig", algorithms.initial_hostkey_signature
+
+      client_packet = nil
+      transport.expect do |_t, buffer|
+        assert_kexinit(buffer)
+        client_packet = buffer
+      end
+      algorithms.rekey!
+
+      @kexinit = nil # the server sends a fresh KEXINIT for the second exchange
+      install_mock_key_exchange(client_packet, session_id: "rekey-hash", server_key: other_hostkey, server_sig_blob: "rekey-sig")
+      install_mock_algorithm_lookups(hash: "rekey-hash", session_id: "initial-hash")
+      algorithms.accept_kexinit(kexinit)
+
+      assert_equal "initial-hash", algorithms.session_id
+      assert_equal hostkey, algorithms.initial_hostkey
+      assert_equal "initial-sig", algorithms.initial_hostkey_signature
+    end
+
     def test_key_exchange_when_server_does_not_support_preferred_kex_should_fallback_to_secondary
       kexinit kex: "diffie-hellman-group14-sha1"
       transport.expect do |_t, buffer|
@@ -302,6 +334,37 @@ module Transport
 
       assert_equal :delayed, transport.client_options[:compression]
       assert_equal :delayed, transport.server_options[:compression]
+    end
+
+    def test_session_bind_proof_is_preserved_from_initial_key_exchange_across_rekey
+      hostkey = OpenSSL::PKey::RSA.new(512)
+
+      transport.expect do |_t, buffer|
+        assert_kexinit(buffer)
+        install_mock_key_exchange(buffer, session_id: "initial-hash", server_key: hostkey, server_sig_blob: "initial-sig")
+      end
+      install_mock_algorithm_lookups(hash: "initial-hash")
+      algorithms.accept_kexinit(kexinit)
+
+      assert_equal "initial-hash", algorithms.session_id
+      assert_equal hostkey, algorithms.initial_hostkey
+      assert_equal "initial-sig", algorithms.initial_hostkey_signature
+
+      client_packet = nil
+      transport.expect do |_t, buffer|
+        assert_kexinit(buffer)
+        client_packet = buffer
+      end
+      algorithms.rekey!
+
+      @kexinit = nil # the server sends a fresh KEXINIT for the second exchange
+      install_mock_key_exchange(client_packet, session_id: "rekey-hash", server_key: "other-key", server_sig_blob: "other-sig")
+      install_mock_algorithm_lookups(hash: "rekey-hash", session_id: "initial-hash")
+      algorithms.accept_kexinit(kexinit)
+
+      assert_equal "initial-hash", algorithms.session_id
+      assert_equal hostkey, algorithms.initial_hostkey
+      assert_equal "initial-sig", algorithms.initial_hostkey_signature
     end
 
     # Verification for https://github.com/net-ssh/net-ssh/issues/483
@@ -369,26 +432,32 @@ module Transport
                need_bytes: 32,
                minimum_dh_bits: nil,
                logger: nil)
-         .returns(stub("kex", exchange_keys: { shared_secret: shared_secret, session_id: session_id, hashing_algorithm: hashing_algorithm }))
+         .returns(stub("kex", exchange_keys: { shared_secret: shared_secret,
+                                               session_id: options[:session_id] || session_id,
+                                               server_key: options[:server_key],
+                                               server_sig_blob: options[:server_sig_blob],
+                                               hashing_algorithm: hashing_algorithm }))
     end
 
     def install_mock_algorithm_lookups(options = {})
-      params = { shared: shared_secret.to_ssh, hash: session_id, digester: hashing_algorithm }
-      key = key("C")
+      hash = options[:hash] || session_id
+      sid = options[:session_id] || hash
+      params = { shared: shared_secret.to_ssh, hash: hash, digester: hashing_algorithm }
+      key = key("C", hash, sid)
 
       cipher_client = OpenStruct.new(implicit_map?: false, id: :client_cipher) # rubocop:disable Style/OpenStructUse
       server_cipher = OpenStruct.new(implicit_map?: false, id: :server_cipher) # rubocop:disable Style/OpenStructUse
       Net::SSH::Transport::CipherFactory.expects(:get)
-                                        .with(options[:client_cipher] || "aes256-ctr", params.merge(iv: key("A"), key: key, encrypt: true))
+                                        .with(options[:client_cipher] || "aes256-ctr", params.merge(iv: key("A", hash, sid), key: key, encrypt: true))
                                         .returns(cipher_client)
 
-      key = key("D")
+      key = key("D", hash, sid)
       Net::SSH::Transport::CipherFactory.expects(:get)
-                                        .with(options[:server_cipher] || "aes256-ctr", params.merge(iv: key("B"), key: key, decrypt: true))
+                                        .with(options[:server_cipher] || "aes256-ctr", params.merge(iv: key("B", hash, sid), key: key, decrypt: true))
                                         .returns(server_cipher)
 
-      Net::SSH::Transport::HMAC.expects(:get).with(options[:client_hmac] || "hmac-sha2-256", key("E"), params).returns(:client_hmac)
-      Net::SSH::Transport::HMAC.expects(:get).with(options[:server_hmac] || "hmac-sha2-256", key("F"), params).returns(:server_hmac)
+      Net::SSH::Transport::HMAC.expects(:get).with(options[:client_hmac] || "hmac-sha2-256", key("E", hash, sid), params).returns(:client_hmac)
+      Net::SSH::Transport::HMAC.expects(:get).with(options[:server_hmac] || "hmac-sha2-256", key("F", hash, sid), params).returns(:server_hmac)
     end
 
     def shared_secret
@@ -403,8 +472,8 @@ module Transport
       OpenSSL::Digest::SHA1
     end
 
-    def key(salt)
-      hashing_algorithm.digest(shared_secret.to_ssh + session_id + salt + session_id)
+    def key(salt, hash = session_id, session_id_ = session_id)
+      hashing_algorithm.digest(shared_secret.to_ssh + hash + salt + session_id_)
     end
 
     def cipher(type, options = {})

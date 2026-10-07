@@ -41,6 +41,11 @@ module Net
         # The map of options that were passed to the key-manager
         attr_reader :options
 
+        # The status of the most recent attempt to bind the agent connection
+        # to the SSH session (see #bind_session). One of :bound, :refused,
+        # :unsupported, or nil if no attempt has been made.
+        attr_reader :session_bind_status
+
         # Create a new KeyManager. By default, the manager will
         # use the ssh-agent if it is running and the `:use_agent` option
         # is not false.
@@ -54,6 +59,8 @@ module Net
           @known_identities = {}
           @agent = nil
           @options = options
+          @session_bind = nil
+          @session_bind_status = nil
         end
 
         # Clear all knowledge of any loaded user keys. This also clears the list
@@ -108,6 +115,34 @@ module Net
         def finish
           @agent.close if @agent
           @agent = nil
+          @session_bind_status = nil
+        end
+
+        # Provides the proof of the server's identity that was collected
+        # during the initial key exchange, so that the agent connection can
+        # be bound to this SSH session via the session-bind@openssh.com
+        # extension before any signature is requested.
+        #
+        # +session_id+ must be the exchange hash of the initial key exchange,
+        # +hostkey+ the server host key presented during that exchange, and
+        # +signature+ the raw signature blob the server made over the exchange
+        # hash. +forwarding+ indicates that the connection will be used to
+        # satisfy forwarded agent requests.
+        #
+        # The bind itself is attempted as soon as an agent connection is
+        # available (and re-attempted whenever the connection is
+        # re-established). Whether authentication may fall back to an unbound
+        # connection is governed by the :session_bind option.
+        def bind_session(session_id:, hostkey:, signature:, forwarding: false)
+          @session_bind = {
+            session_id: session_id,
+            hostkey: hostkey,
+            signature: signature,
+            forwarding: forwarding
+          }
+          @session_bind_status = nil
+          attempt_session_bind if @agent
+          self
         end
 
         # Iterates over all available identities (public keys) known to this
@@ -202,6 +237,8 @@ module Net
           if info[:from] == :agent
             raise KeyManagerError, "the agent is no longer available" unless agent
 
+            ensure_session_bound!
+
             case sig_alg
             when "rsa-sha2-512"
               return agent.sign(info[:identity], data.to_s, Net::SSH::Authentication::Agent::SSH_AGENT_RSA_SHA2_512)
@@ -235,6 +272,8 @@ module Net
           return unless use_agent?
 
           @agent ||= Agent.connect(logger, options[:agent_socket_factory], options[:identity_agent])
+          attempt_session_bind
+          @agent
         rescue AgentNotAvailable
           @use_agent = false
           nil
@@ -245,6 +284,51 @@ module Net
         end
 
         private
+
+        # Attempts to bind the current agent connection to the SSH session,
+        # if a session binding was requested via #bind_session and the
+        # :session_bind option permits it.
+        def attempt_session_bind
+          return unless @agent && @session_bind && @session_bind_status.nil?
+          return if options[:session_bind] == false
+
+          @session_bind_status = @agent.bind_session(
+            @session_bind[:session_id],
+            @session_bind[:hostkey],
+            @session_bind[:signature],
+            forwarding: @session_bind[:forwarding]
+          )
+
+          case @session_bind_status
+          when :bound
+            debug { "bound ssh-agent connection to this session" }
+          when :refused
+            warn { "ssh-agent explicitly refused to bind the agent connection to this session" }
+          else
+            debug { "ssh-agent does not support session binding (session-bind@openssh.com)" }
+          end
+        end
+
+        # Raises KeyManagerError if the agent connection could not be bound
+        # to this session and the :session_bind option does not allow
+        # falling back to an unbound connection.
+        def ensure_session_bound!
+          return unless @session_bind
+          return if options[:session_bind] == false
+          return if @session_bind_status == :bound
+
+          message =
+            case @session_bind_status
+            when :refused
+              "ssh-agent explicitly refused to bind the agent connection to this session"
+            when :unsupported
+              "ssh-agent does not support session binding (session-bind@openssh.com)"
+            else
+              "ssh-agent connection could not be bound to this session"
+            end
+
+          raise KeyManagerError, message if options[:session_bind] == :required
+        end
 
         # Load keycerts from files and data.
         def keycerts

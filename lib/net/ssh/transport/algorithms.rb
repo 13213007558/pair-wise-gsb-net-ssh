@@ -146,6 +146,17 @@ module Net
         # The session-id for this session, as decided during the initial key exchange.
         attr_reader :session_id
 
+        # The server host key that was presented during the initial key
+        # exchange. Together with #session_id and #initial_hostkey_signature
+        # this proves which destination the session was established with, and
+        # is used to bind ssh-agent connections to this session via the
+        # session-bind@openssh.com extension.
+        attr_reader :initial_hostkey
+
+        # The raw signature blob (as sent on the wire) made by the server's
+        # host key over the exchange hash of the initial key exchange.
+        attr_reader :initial_hostkey_signature
+
         # Returns true if the given packet can be processed during a key-exchange.
         def self.allowed_packet?(packet)
           (1..4).include?(packet.type) ||
@@ -461,7 +472,11 @@ module Net
           hash     = result[:session_id]
           digester = result[:hashing_algorithm]
 
-          @session_id ||= hash
+          if @session_id.nil?
+            @session_id = hash
+            @initial_hostkey = result[:server_key]
+            @initial_hostkey_signature = result[:server_sig_blob]
+          end
 
           key = Proc.new { |salt| digester.digest(secret + hash + salt + @session_id) }
 

@@ -39,6 +39,7 @@ module Net
           #
           # * :session_id
           # * :server_key
+          # * :server_sig_blob
           # * :shared_secret
           # * :hashing_algorithm
           #
@@ -53,6 +54,7 @@ module Net
             {
               session_id: session_id,
               server_key: result[:server_key],
+              server_sig_blob: result[:server_sig_blob],
               shared_secret: result[:shared_secret],
               hashing_algorithm: digester
             }

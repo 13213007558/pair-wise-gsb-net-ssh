@@ -214,6 +214,63 @@ module Authentication
       assert_equal "abcxyz123", agent.sign(key, "hello world")
     end
 
+    def test_bind_session_should_send_session_bind_extension_and_return_bound_on_success
+      socket.expect do |s, type, buffer|
+        assert_equal Net::SSH::Authentication::Agent::SSH_AGENT_EXTENSION, type
+        assert_equal "session-bind@openssh.com", buffer.read_string
+        assert_equal Net::SSH::Buffer.from(:key, key).to_s, buffer.read_string
+        assert_equal "initial-exchange-hash", buffer.read_string
+        assert_equal "hostkey-signature-blob", buffer.read_string
+        assert_equal 0, buffer.read_byte
+
+        s.return(SSH_AGENT_SUCCESS)
+      end
+
+      assert_equal :bound, agent.bind_session("initial-exchange-hash", key, "hostkey-signature-blob")
+    end
+
+    def test_bind_session_should_set_forwarding_flag_when_forwarding
+      socket.expect do |s, type, buffer|
+        assert_equal Net::SSH::Authentication::Agent::SSH_AGENT_EXTENSION, type
+        buffer.read_string # extension name
+        buffer.read_string # hostkey blob
+        buffer.read_string # session id
+        buffer.read_string # signature
+        assert_equal 1, buffer.read_byte
+
+        s.return(SSH_AGENT_SUCCESS)
+      end
+
+      assert_equal :bound, agent.bind_session("initial-exchange-hash", key, "hostkey-signature-blob", forwarding: true)
+    end
+
+    def test_bind_session_should_return_refused_if_agent_explicitly_rejects_extension
+      socket.expect do |s, type, _buffer|
+        assert_equal Net::SSH::Authentication::Agent::SSH_AGENT_EXTENSION, type
+        s.return(Net::SSH::Authentication::Agent::SSH_AGENT_EXTENSION_FAILURE)
+      end
+
+      assert_equal :refused, agent.bind_session("initial-exchange-hash", key, "hostkey-signature-blob")
+    end
+
+    def test_bind_session_should_return_unsupported_if_agent_does_not_implement_extensions
+      socket.expect do |s, type, _buffer|
+        assert_equal Net::SSH::Authentication::Agent::SSH_AGENT_EXTENSION, type
+        s.return(SSH_AGENT_FAILURE)
+      end
+
+      assert_equal :unsupported, agent.bind_session("initial-exchange-hash", key, "hostkey-signature-blob")
+    end
+
+    def test_bind_session_should_return_unsupported_if_agent_returns_ssh2_agent_failure
+      socket.expect do |s, type, _buffer|
+        assert_equal Net::SSH::Authentication::Agent::SSH_AGENT_EXTENSION, type
+        s.return(SSH2_AGENT_FAILURE)
+      end
+
+      assert_equal :unsupported, agent.bind_session("initial-exchange-hash", key, "hostkey-signature-blob")
+    end
+
     def test_add_rsa_identity_with_constraints
       rsa = OpenSSL::PKey::RSA.new(512)
       socket.expect do |s, type, buffer|

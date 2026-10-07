@@ -55,7 +55,8 @@ module Net
             result[:server_ecdh_pubkey] = buffer.read_string
             result[:shared_secret] = compute_shared_secret(result[:server_ecdh_pubkey])
 
-            sig_buffer = Net::SSH::Buffer.new(buffer.read_string)
+            result[:server_sig_blob] = buffer.read_string
+            sig_buffer = Net::SSH::Buffer.new(result[:server_sig_blob])
             sig_type = sig_buffer.read_string
             if sig_type != algorithms.host_key_format
               raise Net::SSH::Exception, "host key algorithm mismatch for signature '#{sig_type}' != '#{algorithms.host_key_format}'"

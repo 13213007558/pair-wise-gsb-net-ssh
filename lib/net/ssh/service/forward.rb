@@ -410,14 +410,47 @@ module Net
 
           begin
             agent = Authentication::Agent.connect(logger, session.options[:agent_socket_factory])
+            bind_forwarded_agent(session, agent)
             if (agent.socket.is_a? ::IO)
               prepare_client(agent.socket, channel, :agent)
             else
               prepare_simple_client(agent.socket, channel, :agent)
             end
+          rescue Net::SSH::ChannelOpenFailed
+            raise
           rescue Exception => e
             error { "attempted to connect to agent but failed: #{e.class.name} (#{e.message})" }
             raise Net::SSH::ChannelOpenFailed.new(2, "could not connect to authentication agent")
+          end
+        end
+
+        # Binds a forwarded agent connection to this session by passing the
+        # host proof from the initial key exchange to the agent, so that the
+        # agent can apply the correct destination-binding semantics to
+        # forwarded signature requests. Whether forwarding may continue over
+        # an unbound connection is governed by the :session_bind option.
+        def bind_forwarded_agent(session, agent)
+          return if session.options[:session_bind] == false
+
+          algorithms = session.transport.algorithms
+          session_id = algorithms.session_id
+          hostkey = algorithms.initial_hostkey
+          signature = algorithms.initial_hostkey_signature
+          return unless session_id && hostkey && signature
+
+          case agent.bind_session(session_id, hostkey, signature, forwarding: true)
+          when :bound
+            debug { "bound forwarded agent connection to this session" }
+          when :refused
+            message = "ssh-agent explicitly refused to bind the forwarded agent connection to this session"
+            raise Net::SSH::ChannelOpenFailed.new(2, message) if session.options[:session_bind] == :required
+
+            warn { message }
+          else
+            message = "ssh-agent does not support session binding (session-bind@openssh.com)"
+            raise Net::SSH::ChannelOpenFailed.new(2, message) if session.options[:session_bind] == :required
+
+            debug { message }
           end
         end
       end

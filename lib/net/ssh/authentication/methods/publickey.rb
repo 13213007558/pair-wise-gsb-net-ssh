@@ -15,6 +15,8 @@ module Net
           def authenticate(next_service, username, password = nil)
             return false unless key_manager
 
+            bind_agent_to_session
+
             key_manager.each_identity do |identity|
               return true if authenticate_with(identity, next_service, username)
             end
@@ -23,6 +25,22 @@ module Net
           end
 
           private
+
+          # Hands the host proof from the initial key exchange to the key
+          # manager, so that the agent connection can be bound to this
+          # session (session-bind@openssh.com) before any signature is
+          # requested from the agent.
+          def bind_agent_to_session
+            return unless key_manager.use_agent?
+
+            algorithms = session.transport.algorithms
+            session_id = algorithms.session_id
+            hostkey = algorithms.initial_hostkey
+            signature = algorithms.initial_hostkey_signature
+            return unless session_id && hostkey && signature
+
+            key_manager.bind_session(session_id: session_id, hostkey: hostkey, signature: signature)
+          end
 
           # Builds a packet that contains the request formatted for sending
           # a public-key request to the server.

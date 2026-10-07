@@ -43,6 +43,9 @@ module Net
         SSH2_AGENT_LOCK                  = 22
         SSH2_AGENT_UNLOCK                = 23
         SSH2_AGENT_ADD_ID_CONSTRAINED    = 25
+        SSH_AGENT_EXTENSION              = 27
+        SSH_AGENT_EXTENSION_FAILURE      = 28
+        SSH_AGENT_EXTENSIONS             = 29
         SSH2_AGENT_FAILURE               = 30
         SSH2_AGENT_VERSION_RESPONSE      = 103
 
@@ -59,6 +62,10 @@ module Net
 
         SSH_AGENT_RSA_SHA2_256 = 0x02
         SSH_AGENT_RSA_SHA2_512 = 0x04
+
+        # The name of the agent extension that binds an agent connection to a
+        # particular SSH session.
+        SESSION_BIND_EXTENSION = "session-bind@openssh.com"
 
         # The underlying socket being used to communicate with the SSH agent.
         attr_reader :socket
@@ -160,6 +167,40 @@ module Net
           raise AgentError, "bad authentication response #{type}" if type != SSH2_AGENT_SIGN_RESPONSE
 
           return reply.read_string
+        end
+
+        # Binds this agent connection to a particular SSH session, using the
+        # session-bind@openssh.com extension. This tells the agent which
+        # destination this connection is authenticating to, so that it can
+        # verify that subsequent signature requests belong to that session.
+        #
+        # +session_id+ must be the exchange hash (H) of the initial key
+        # exchange, +hostkey+ the server host key presented during that
+        # exchange, and +signature+ the raw signature blob the server made
+        # over the exchange hash with that host key. +forwarding+ should be
+        # true when this connection will be used to satisfy forwarded agent
+        # requests rather than direct signing.
+        #
+        # Returns :bound if the agent accepted the binding, :refused if the
+        # agent understood the extension but explicitly rejected the binding,
+        # and :unsupported if the agent does not implement the extension at
+        # all.
+        def bind_session(session_id, hostkey, signature, forwarding: false)
+          type, = send_and_wait(SSH_AGENT_EXTENSION,
+                                :string, SESSION_BIND_EXTENSION,
+                                :string, Buffer.from(:key, hostkey).to_s,
+                                :string, session_id,
+                                :string, signature,
+                                :byte, forwarding ? 1 : 0)
+
+          case type
+          when SSH_AGENT_SUCCESS
+            :bound
+          when SSH_AGENT_EXTENSION_FAILURE
+            :refused
+          else
+            :unsupported
+          end
         end
 
         # Adds the private key with comment to the agent.

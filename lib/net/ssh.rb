@@ -69,7 +69,7 @@ module Net
       max_win_size send_env set_env use_agent number_of_password_prompts
       append_all_supported_algorithms non_interactive password_prompt
       agent_socket_factory minimum_dh_bits verify_host_key
-      fingerprint_hash check_host_ip pubkey_algorithms
+      fingerprint_hash check_host_ip pubkey_algorithms session_bind
     ]
 
     # The standard means of starting a new SSH connection. When used with a
@@ -178,6 +178,14 @@ module Net
     # * :rekey_packet_limit => the max number of packets to process before rekeying
     # * :send_env => an array of local environment variable names to export to the
     #   remote environment. Names may be given as String or Regexp.
+    # * :session_bind => controls binding of the ssh-agent connection to this
+    #   SSH session via the session-bind@openssh.com extension, using the host
+    #   proof (host key, exchange hash and host key signature) collected during
+    #   the initial key exchange. +true+ (the default) attempts to bind and
+    #   falls back to an unbound agent connection if the agent does not
+    #   support the extension or refuses the binding; +:required+ refuses to
+    #   sign with (or forward) an agent that cannot be bound; +false+ never
+    #   attempts to bind.
     # * :set_env => a hash of environment variable names and values to set to the
     #   remote environment. Override the ones if specified in +send_env+.
     # * :timeout => how long to wait for the initial connection to be made
