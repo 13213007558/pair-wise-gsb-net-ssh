@@ -1,3 +1,7 @@
+=== unreleased
+
+  * Add OpenSSH security key public key types sk-ssh-ed25519@openssh.com and sk-ecdsa-sha2-nistp256@openssh.com: public key loading, ssh-agent signing and signature verification (application, authenticator flags and signature counter are verified as part of the signed data, with a caller-configurable flag policy)
+
 === 8.0.0 beta3
 
   * Verify @cert-authority host certificate constraints — principals (shell-glob, matching OpenSSH), validity window, host type, and critical options — instead of trusting any CA-signed certificate for any host [#1009]

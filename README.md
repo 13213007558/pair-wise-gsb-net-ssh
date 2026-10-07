@@ -45,6 +45,8 @@ Unsecure algoritms will definitely be removed in Net::SSH 8.*.
 | ecdsa-sha2-nistp384  | OK                    | [using weak elliptic curves](https://safecurves.cr.yp.to/) |
 | ecdsa-sha2-nistp256  | OK                    | [using weak elliptic curves](https://safecurves.cr.yp.to/) |
 | ssh-dss              | Deprecated in 6.0     | unsecure, will be removed in 8.0 |
+| sk-ssh-ed25519@openssh.com | OK            | security key (FIDO2) public keys: loading, agent signing and signature verification; private keys stay on the token |
+| sk-ecdsa-sha2-nistp256@openssh.com | OK     | security key (FIDO2) public keys: loading, agent signing and signature verification; private keys stay on the token |
 
 ### Key Exchange
 

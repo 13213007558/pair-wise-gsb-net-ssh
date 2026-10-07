@@ -61,7 +61,14 @@ module Net
               raise Net::SSH::Exception, "host key algorithm mismatch for signature '#{sig_type}' != '#{algorithms.host_key_format}'"
             end
 
-            result[:server_sig] = sig_buffer.read_string
+            result[:server_sig] =
+              if Net::SSH::Authentication::SecurityKey.algorithm?(sig_type)
+                # security key signatures carry authenticator flags and a
+                # signature counter after the raw signature; keep them.
+                sig_buffer.remainder_as_buffer.to_s
+              else
+                sig_buffer.read_string
+              end
 
             result
           end

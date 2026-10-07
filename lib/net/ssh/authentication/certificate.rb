@@ -103,7 +103,15 @@ module Net
         def signature_valid?
           buffer = Buffer.new(signature)
           sig_format = buffer.read_string
-          signature_key.ssh_do_verify(buffer.read_string, to_blob_without_signature, host_key: sig_format)
+          sig =
+            if Net::SSH::Authentication::SecurityKey.algorithm?(sig_format)
+              # security key signatures carry authenticator flags and a
+              # signature counter after the raw signature; keep them.
+              buffer.remainder_as_buffer.to_s
+            else
+              buffer.read_string
+            end
+          signature_key.ssh_do_verify(sig, to_blob_without_signature, host_key: sig_format)
         end
 
         def self.read_options(buffer)
