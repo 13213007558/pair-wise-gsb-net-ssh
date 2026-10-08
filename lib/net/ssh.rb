@@ -70,6 +70,7 @@ module Net
       append_all_supported_algorithms non_interactive password_prompt
       agent_socket_factory minimum_dh_bits verify_host_key
       fingerprint_hash check_host_ip pubkey_algorithms
+      keyboard_interactive_challenge_handler
     ]
 
     # The standard means of starting a new SSH connection. When used with a
@@ -201,6 +202,13 @@ module Net
     #   authentication method defaults to 3 set to 0 to disable prompt for
     #   password auth method
     # * :password_prompt => a custom prompt object with ask method. See Net::SSH::Prompt
+    #
+    # * :keyboard_interactive_challenge_handler => a callable that receives each
+    #   keyboard-interactive challenge as a
+    #   Net::SSH::Authentication::Methods::KeyboardInteractive::Challenge object,
+    #   so answers can be submitted later via Challenge#submit instead of
+    #   blocking while packets are read. See
+    #   Net::SSH::Authentication::Methods::KeyboardInteractive::Challenge
     #
     # * :agent_socket_factory => enables the user to pass a lambda/block that will serve as the socket factory
     #    Net::SSH.start(host,user,agent_socket_factory: ->{ UNIXSocket.open('/foo/bar') })

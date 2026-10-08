@@ -15,6 +15,12 @@ module Net
       class DisallowedMethod < Net::SSH::Exception
       end
 
+      # Raised if an in-progress authentication exchange is cancelled by the
+      # caller, e.g. when a keyboard-interactive challenge is cancelled
+      # instead of submitting answers for it.
+      class Cancelled < Net::SSH::Exception
+      end
+
       # Represents an authentication session. It manages the authentication of
       # a user over an established connection (the "transport" object, see
       # Net::SSH::Transport::Session).
@@ -79,7 +85,8 @@ module Net
               auth_class = Methods.const_get(name.split(/\W+/).map { |p| p.capitalize }.join)
               method = auth_class.new(self,
                                       key_manager: key_manager, password_prompt: options[:password_prompt],
-                                      pubkey_algorithms: options[:pubkey_algorithms] || nil)
+                                      pubkey_algorithms: options[:pubkey_algorithms] || nil,
+                                      keyboard_interactive_challenge_handler: options[:keyboard_interactive_challenge_handler])
             rescue NameError
               debug {"Mechanism #{name} was requested, but isn't a known type.  Ignoring it."}
               next

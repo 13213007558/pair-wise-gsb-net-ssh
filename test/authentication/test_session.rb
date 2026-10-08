@@ -50,6 +50,23 @@ module Authentication
       assert_equal false, session.authenticate("next service", "username", "password")
     end
 
+    def test_authenticate_should_pass_keyboard_interactive_challenge_handler_to_the_method
+      transport.expect do |t, packet|
+        assert_equal SERVICE_REQUEST, packet.type
+        assert_equal "ssh-userauth", packet.read_string
+        t.return(SERVICE_ACCEPT)
+      end
+
+      handler = ->(challenge) { challenge.cancel }
+      Net::SSH::Authentication::Methods::KeyboardInteractive
+        .expects(:new)
+        .with(anything, has_entry(:keyboard_interactive_challenge_handler, handler))
+        .returns(stub(authenticate: true))
+
+      assert session(auth_methods: %w[keyboard-interactive],
+                     keyboard_interactive_challenge_handler: handler).authenticate("next service", "username", "password")
+    end
+
     def test_next_message_should_silently_handle_USERAUTH_BANNER_packets
       transport.return(USERAUTH_BANNER, :string, "Howdy, folks!")
       transport.return(SERVICE_ACCEPT)
