@@ -6,6 +6,7 @@ Rudyfile
 THANKS.rdoc
 lib/net/ssh.rb
 lib/net/ssh/authentication/agent.rb
+lib/net/ssh/authentication/challenge.rb
 lib/net/ssh/authentication/constants.rb
 lib/net/ssh/authentication/key_manager.rb
 lib/net/ssh/authentication/methods/abstract.rb
@@ -90,6 +91,7 @@ test/authentication/methods/test_keyboard_interactive.rb
 test/authentication/methods/test_password.rb
 test/authentication/methods/test_publickey.rb
 test/authentication/test_agent.rb
+test/authentication/test_challenge.rb
 test/authentication/test_key_manager.rb
 test/authentication/test_session.rb
 test/common.rb

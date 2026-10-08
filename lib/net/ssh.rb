@@ -69,6 +69,7 @@ module Net
       max_win_size send_env set_env use_agent number_of_password_prompts
       append_all_supported_algorithms non_interactive password_prompt
       agent_socket_factory minimum_dh_bits verify_host_key
+      keyboard_interactive_handler
       fingerprint_hash check_host_ip pubkey_algorithms
     ]
 
@@ -201,6 +202,13 @@ module Net
     #   authentication method defaults to 3 set to 0 to disable prompt for
     #   password auth method
     # * :password_prompt => a custom prompt object with ask method. See Net::SSH::Prompt
+    # * :keyboard_interactive_handler => a Proc/callable invoked with a
+    #   Net::SSH::Authentication::KeyboardInteractiveChallenge for every
+    #   keyboard-interactive info request. The callable may answer the
+    #   challenge asynchronously via Challenge#respond (one answer per prompt)
+    #   or abort with Challenge#cancel; it must not block the packet loop.
+    #   Challenges for older rounds and challenges left unanswered after
+    #   authentication succeeds or fails are expired. Answers are never logged.
     #
     # * :agent_socket_factory => enables the user to pass a lambda/block that will serve as the socket factory
     #    Net::SSH.start(host,user,agent_socket_factory: ->{ UNIXSocket.open('/foo/bar') })
